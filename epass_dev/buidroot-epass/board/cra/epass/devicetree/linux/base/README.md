@@ -1,6 +1,6 @@
 # CRA Electric Pass 基础设备树
 
-其他语言版本: [English](README.md), [中文](README_CN.md).
+其他语言版本: [English](README_EN.md), [中文](README.md).
 
 本目录保存 CRA Electric Pass 的 Linux 基础设备树。目前工程仅面向白银 v0.6 板型。
 
