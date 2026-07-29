@@ -26,7 +26,7 @@
 	/* DE → TCON0 → RGB LCD panel*/
 	/* RGB565 总线 | 384*640 | 60Hz */
 	panel: panel {
-		compatible = "lattland,mostima", "simple-panel"
+		compatible = "lattland,mostima", "simple-panel";
 
 		#address-cells = <1>;
 		#size-cells = <0>;
