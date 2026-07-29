@@ -1,6 +1,6 @@
 # CRA Electric Pass Base Device Tree
 
-Read this in other languages: [English](README.md), [中文](README_CN.md).
+Read this in other languages: [English](README_EN.md), [中文](README.md).
 
 This directory contains the Linux base device tree for CRA Electric Pass. The current project targets the Shirogane v0.6 hardware revision only.
 
