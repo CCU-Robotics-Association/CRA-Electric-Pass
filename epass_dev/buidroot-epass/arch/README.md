@@ -1,6 +1,6 @@
 # Buildroot 架构配置
 
-Read this in other languages: [English](README_EN.md), [中文](README.md).
+其他语言版本: [English](README_EN.md), [中文](README.md).
 
 本目录为 Buildroot 的目标架构配置层，用于描述 Buildroot 支持的处理器架构、CPU 核心、指令集、ABI、字节序、浮点模式和相关工具链参数。
 
