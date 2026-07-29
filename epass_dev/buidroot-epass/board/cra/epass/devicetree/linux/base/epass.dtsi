@@ -13,13 +13,9 @@
 			 "allwinner,suniv-f1c100s";
 
 	chosen {
-		#address-cells = <1>;
-		#size-cells = <1>;
-		ranges;
-
 		/* U-Boot 传入实际:根文件系统位置|串口控制台|UBI/UBIFS参数|NAND分区参数 */
 		/* bootargs 仅作占位 */
-		bootargs = "Don`t give yourselves to those unnatural men -- you are not machines -- you are men";
+		bootargs = "Don't give yourselves to those unnatural men -- you are not machines -- you are men";
 	};
 
 	/* LCD panel */
@@ -43,7 +39,7 @@
 		};
 	};
 
-	/* Regulayor */ 	
+	/* Regulator */ 	
 	/* vcc3v3 - 3.3V */
 	/* lradc_vref - 3.0V */
 	reg_vcc3v3: vcc3v3 {
