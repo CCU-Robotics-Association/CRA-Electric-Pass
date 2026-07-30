@@ -1,0 +1,19 @@
+diff --git a/arch/arm/mach-sunxi/spl_spi_sunxi.c b/arch/arm/mach-sunxi/spl_spi_sunxi.c
+index 25fd17a3..5c90d42a 100644
+--- a/arch/arm/mach-sunxi/spl_spi_sunxi.c
++++ b/arch/arm/mach-sunxi/spl_spi_sunxi.c
+@@ -346,6 +346,14 @@ static enum flashtype spi0_get_flash_type(void)
+ 			printf("SPI-NAND: Winbond W25N01G\n");
+ 			type = FLASHTYPE_NAND;
+ 		}
++		else if (!memcmp(chipid, "\xc2\x12", 2)) {
++			printf("SPI-NAND: Macronix MX35LF1GE4AB\n");
++			type = FLASHTYPE_NAND;
++		}
++		else if (!memcmp(chipid, "\xc2\x14", 2)) {
++			printf("SPI-NAND: Macronix MX35LF1G24AD\n");
++			type = FLASHTYPE_NAND;
++		}
+ 		else if (!memcmp(chipid, "\xef\xab", 2)) {
+ 			printf("SPI-NAND: Winbond W25M02GV\n");
+ 			type = FLASHTYPE_NAND;
