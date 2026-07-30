@@ -1,0 +1,10 @@
+/dts-v1/;
+/plugin/;
+/ {
+    fragment@1 {
+        target = <&rtp>;
+        __overlay__ {
+            pinctrl-0 = <&rtp_pins>;
+        };
+    };
+};

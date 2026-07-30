@@ -1,0 +1,12 @@
+/dts-v1/;
+/plugin/;
+/ {
+    fragment@1 {
+        target = <&i2s0>;
+        __overlay__ {
+            status = "okay";
+            pinctrl-0 = <&i2s_pins_pa>;
+            pinctrl-names = "default";
+        };
+    };
+};
