@@ -4,11 +4,12 @@
 
 <sub>Read this in other languages: [English](README_EN.md), [中文](README.md).</sub>
 
+> [!NOTE]
+> This directory is Buildroot's target architecture configuration layer. It describes the supported processor architectures, CPU cores, instruction sets, ABIs, endianness, floating-point modes, and related toolchain parameters.
+
+> CRA Electric Pass uses only the 32-bit ARM configuration in this directory. Its target processor is the ARM926EJ-S core integrated into the Allwinner F1C200S.
+
 </div>
-
-**This directory is Buildroot's target architecture configuration layer. It describes the supported processor architectures, CPU cores, instruction sets, ABIs, endianness, floating-point modes, and related toolchain parameters.**
-
-> **CRA Electric Pass uses only the 32-bit ARM configuration in this directory. Its target processor is the ARM926EJ-S core integrated into the Allwinner F1C200S.**
 
 ---
 
