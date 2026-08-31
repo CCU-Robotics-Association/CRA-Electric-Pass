@@ -1,153 +1,241 @@
+<div align="center">
+
 # CRA Electric Pass 屏幕设备树覆盖层
 
-其他语言版本：[English](README_EN.md)，[中文](README.md)。
+<sub>Read this in other languages: [English](README_EN.md), [中文](README.md).</sub>
 
-本目录保存 CRA Electric Pass 的 Linux LCD 屏幕设备树覆盖层，用于在启动时选择与实体屏幕相匹配的 ST7701 初始化序列。当前工程仅面向白银 v0.6 板型。
+</div>
 
-## 文件说明
+> [!NOTE]
+> 本目录保存 CRA Electric Pass 的 Linux LCD 屏幕设备树覆盖层，用于在启动时选择与实体屏幕匹配的 ST7701 初始化序列。
+
+<p align="center">
+  <a href="#屏幕配置总览">屏幕总览</a> ·
+  <a href="#显示系统">显示系统</a> ·
+  <a href="#公共基础配置">公共配置</a> ·
+  <a href="#overlay-结构">Overlay</a> ·
+  <a href="#st7701-初始化序列">ST7701</a> ·
+  <a href="#三种屏幕配置">屏幕差异</a> ·
+  <a href="#编译与启动">编译启动</a> ·
+  <a href="#故障排查">故障排查</a>
+</p>
+
+---
+
+## 屏幕配置总览
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+### BOE
+
+```text
+screen=boe
+```
+
+- 独立 ST7701 初始化表
+- 无红蓝交换
+- Gamma / 电源 / GIP 参数独立
+- 额外发送 `0x35 0x00`
+
+</td>
+<td width="33%" valign="top">
+
+### HSD
+
+```text
+screen=hsd
+```
+
+- 独立 ST7701 初始化表
+- 无红蓝交换
+- 当前 `flash.py` 主入口默认参数
+
+</td>
+<td width="33%" valign="top">
+
+### Laowu
+
+```text
+screen=laowu
+```
+
+- 初始化表与 HSD 相同
+- 启用 TCON0 红蓝通道交换
+- 使用 `cra,swap-b-r`
+
+</td>
+</tr>
+</table>
 
 | 文件 | 初始化序列 | 额外处理 | 启动参数 |
-| --- | --- | --- | --- |
-| `boe.dts` | BOE 屏幕使用的 ST7701 初始化序列 | 无 | `screen=boe` |
-| `hsd.dts` | HSD 屏幕使用的 ST7701 初始化序列 | 无 | `screen=hsd` |
-| `laowu.dts` | 与 `hsd.dts` 相同的 ST7701 初始化序列 | 在 TCON0 中交换红、蓝通道 | `screen=laowu` |
+| :--- | :--- | :--- | :--- |
+| `boe.dts` | BOE 专用 ST7701 初始化序列 | 无 | `screen=boe` |
+| `hsd.dts` | HSD 专用 ST7701 初始化序列 | 无 | `screen=hsd` |
+| `laowu.dts` | 与 HSD 相同 | TCON0 红蓝交换 | `screen=laowu` |
 
-## 显示系统中的位置
+---
 
-完整显示链路为：
+## 显示系统
 
-```text
-Linux DRM
-   │
-   ▼
-Allwinner DE
-   │
-   ▼
-TCON0
-   │
-   ▼
-RGB565 并行总线
-   │
-   ▼
-ST7701 LCD 面板
+### 显示链路
+
+```mermaid
+flowchart LR
+    A["Linux DRM"] --> B["Allwinner DE"]
+    B --> C["TCON0"]
+    C --> D["RGB565 并行总线"]
+    D --> E["ST7701 LCD Panel"]
 ```
 
-相关配置分布在多个位置：
+### 配置分布
 
-```text
-base/epass.dtsi
-├─ 声明 panel 节点
-├─ 声明 PWM 背光
-├─ 声明 RGB565 引脚组
-├─ 启用 TCON0
-└─ 声明默认关闭的 st7701initseq 节点
+```mermaid
+flowchart TB
+    A["base/epass.dtsi"]
+    B["base/devicetree.dts"]
+    C["screen/*.dts"]
+    D["Linux patches"]
+    E["最终显示配置"]
 
-base/devicetree.dts
-└─ 为 st7701initseq 分配 SDA、SCL、CS GPIO
-
-screen/*.dts
-├─ 启用 st7701initseq
-├─ 提供对应屏幕的初始化序列
-├─ 指定公共 panel compatible
-└─ 必要时启用红蓝通道交换
-
-内核补丁
-├─ 0002-panel-simple.patch：公共分辨率、时序和 RGB565 格式
-├─ 0004-swap_rb_as_config.patch：TCON0 红蓝通道交换
-└─ 0006-initalize-st7701.patch：GPIO 模拟的 ST7701 初始化驱动
+    A --> E
+    B --> E
+    C --> E
+    D --> E
 ```
+
+| 位置 | 负责内容 |
+| :--- | :--- |
+| `base/epass.dtsi` | panel、PWM 背光、RGB565 引脚组、TCON0、默认关闭的 `st7701initseq` |
+| `base/devicetree.dts` | ST7701 初始化 SDA / SCL / CS GPIO |
+| `screen/*.dts` | 启用初始化节点、写入面板初始化表、必要时启用红蓝交换 |
+| `0002-panel-simple.patch` | 公共分辨率、时序、RGB565 格式 |
+| `0004-swap_rb_as_config.patch` | TCON0 红蓝通道交换 |
+| `0006-initalize-st7701.patch` | GPIO 模拟 ST7701 初始化驱动 |
+
+---
 
 ## 公共基础配置
 
 ### RGB 显示总线
 
-`base/epass.dtsi` 中的 `lcd_rgb565_no_de_pins` 使用以下引脚：
+`base/epass.dtsi` 中的 `lcd_rgb565_no_de_pins` 使用：
 
 ```text
-PD1～PD11
-PD13～PD18
+PD1 ～ PD11
+PD13 ～ PD18
 PD20
 PD21
 ```
 
-这些引脚组成 RGB565 数据、像素时钟和同步信号。配置名称中的 `no_de` 表示该引脚组不使用独立的 Data Enable 引脚。
+这些引脚承载：
 
-公共面板描述采用：
+- RGB565 数据
+- Pixel Clock
+- HSYNC
+- VSYNC
+
+`no_de` 表示该引脚组不使用独立 Data Enable 引脚。
+
+公共面板匹配：
 
 ```dts
-compatible = "lattland,mostima", "simple-panel";
+compatible = "cra,epass-panel", "simple-panel";
 ```
 
-其中 `lattland,mostima` 是原项目内核补丁注册的自定义兼容字符串，不是主线 Linux 中自带的标准 ST7701 面板型号。
+> [!IMPORTANT]
+> `cra,epass-panel` 为内核补丁注册的项目专用匹配字符串。
+
+---
 
 ### ST7701 初始化引脚
 
-`base/devicetree.dts` 为初始化驱动配置：
-
 | 信号 | GPIO | 作用 |
-| --- | --- | --- |
-| SDA | PE4 | 串行命令或数据位 |
+| :--- | :--- | :--- |
+| SDA | PE4 | 串行命令 / 数据 |
 | SCL | PD19 | 串行时钟 |
 | CS | PE11 | 片选 |
-| RST | 未声明 | 驱动支持可选复位脚，但当前板级设备树未使用 |
+| RST | 未声明 | 驱动支持可选复位脚，当前板级设备树未使用 |
 
-该通信由自定义内核驱动直接翻转 GPIO 完成，不使用 F1C200S 的硬件 SPI 控制器。
+初始化通信由自定义驱动直接翻转 GPIO 完成，不使用 F1C200S 硬件 SPI 控制器。
 
-每次传输先发送一位命令/数据标志，再发送八位内容：
+### 单次传输格式
 
-- 标志位为 `0` 时表示命令。
-- 标志位为 `1` 时表示数据。
-- 每个字节按最高位优先发送。
-- `CS` 拉低开始一组写入，拉高结束。
+```mermaid
+flowchart LR
+    A["CS 拉低"] --> B["命令 / 数据标志位"]
+    B --> C["8-bit 内容<br/>MSB First"]
+    C --> D["继续发送"]
+    D --> E["CS 拉高"]
+```
 
-这是一种面向当前屏幕接法的 GPIO 模拟初始化方式，不能把这些引脚直接当作普通 SPI 覆盖层使用。
+| 标志位 | 含义 |
+| :---: | :--- |
+| `0` | Command |
+| `1` | Data |
+
+> [!WARNING]
+> PE4、PD19、PE11 在当前方案中属于 ST7701 初始化链路，不应直接当作普通 SPI 接口复用。
+
+---
 
 ### 背光
 
-背光不由本目录配置，而由 `base/epass.dtsi` 中的 `pwm-backlight` 节点统一管理：
+背光由 `base/epass.dtsi` 的 `pwm-backlight` 统一管理。
 
-- PWM 控制器：PWM0
-- 周期：`10000 ns`
-- 频率：约 `100 kHz`
-- 亮度表：`0 4 8 16 32 64 128 196 220 255`
-- 默认亮度索引：`6`
-- 默认亮度值：`128`
+| 项目 | 当前配置 |
+| :--- | :--- |
+| PWM 控制器 | PWM0 |
+| PWM 周期 | `10000 ns` |
+| 频率 | 约 `100 kHz` |
+| 亮度表 | `0 4 8 16 32 64 128 196 220 255` |
+| 默认亮度索引 | `6` |
+| 默认亮度值 | `128` |
+
+---
 
 ## 公共显示模式
 
-三种屏幕覆盖层最终都使用同一个 `lattland,mostima` 面板描述。公共显示模式由：
+三种屏幕覆盖层最终都使用 `cra,epass-panel`。
+
+公共模式由：
 
 ```text
 board/cra/epass/patch/linux/0002-panel-simple.patch
 ```
 
-加入 Linux `panel-simple` 驱动。
-
-当前参数为：
+提供。
 
 | 参数 | 数值 |
-| --- | ---: |
-| 像素时钟 | 24000 kHz |
-| 水平有效像素 | 384 |
-| 水平同步起点 | 444 |
-| 水平同步终点 | 450 |
-| 水平总计 | 528 |
-| 垂直有效像素 | 640 |
-| 垂直同步起点 | 656 |
-| 垂直同步终点 | 660 |
-| 垂直总计 | 669 |
+| :--- | ---: |
+| Pixel Clock | 24000 kHz |
+| H Active | 384 |
+| H Sync Start | 444 |
+| H Sync End | 450 |
+| H Total | 528 |
+| V Active | 640 |
+| V Sync Start | 656 |
+| V Sync End | 660 |
+| V Total | 669 |
 | 声明刷新率 | 60 Hz |
 | 总线格式 | `MEDIA_BUS_FMT_RGB565_1X16` |
 | 每颜色分量位数 | 6 bpc |
 
-需要注意：按照像素时钟和总计值计算，
+按照当前像素时钟与总计值计算：
 
 ```text
 24,000,000 ÷ (528 × 669) ≈ 67.9 Hz
 ```
-## 覆盖层基本结构
 
-三个文件都是 Device Tree Overlay：
+> [!NOTE]
+> 设备树中声明为 60 Hz，但按当前参数直接计算约为 67.9 Hz。调整显示时序时应同时核对像素时钟与水平 / 垂直总计。
+
+---
+
+## Overlay 结构
+
+三个文件都属于 Device Tree Overlay：
 
 ```dts
 #include <dt-bindings/display/st7701initseq.h>
@@ -167,7 +255,7 @@ board/cra/epass/patch/linux/0002-panel-simple.patch
     fragment@2 {
         target = <&panel>;
         __overlay__ {
-            compatible = "lattland,mostima", "simple-panel";
+            compatible = "cra,epass-panel", "simple-panel";
         };
     };
 };
@@ -175,69 +263,99 @@ board/cra/epass/patch/linux/0002-panel-simple.patch
 
 ### `fragment@1`
 
-目标是基础设备树中的 `&st7701initseq`：
+目标：
 
-- 将默认的 `status = "disabled"` 改为 `status = "okay"`。
-- 写入当前屏幕对应的 `init-sequence`。
-- 使自定义 ST7701 初始化驱动在 Linux 启动时匹配并执行。
+```text
+&st7701initseq
+```
+
+作用：
+
+- 将 `status = "disabled"` 改为 `okay`
+- 写入当前屏幕对应 `init-sequence`
+- 触发 CRA ST7701 初始化驱动
 
 ### `fragment@2`
 
-目标是基础设备树中的 `&panel`，指定公共的面板驱动兼容字符串。
+目标：
 
-三个文件目前写入的 `compatible` 完全相同，因此分辨率、同步时序和 RGB565 格式也完全相同。它们之间的主要差异是 ST7701 寄存器初始化内容，而不是 DRM 显示模式。
+```text
+&panel
+```
 
-当前 `base/epass.dtsi` 已经声明了完全相同的 `compatible`，所以这个片段在现有组合中不会改变最终值，更像是原覆盖层结构中保留下来的重复声明。若以后为不同屏幕增加真正独立的面板时序，可以在这里改为各自的兼容字符串，同时在内核面板驱动中提供对应描述。
+三个覆盖层目前都写入同一个：
 
-片段编号从 `fragment@1` 开始而没有 `fragment@0` 并不构成设备树语法错误；编号只需在同一个覆盖层中保持唯一。
+```dts
+compatible = "cra,epass-panel", "simple-panel";
+```
 
-### `fragment@3`
+因此当前三种屏幕共用：
 
-只有 `laowu.dts` 包含：
+- 分辨率
+- 同步时序
+- RGB565 总线格式
+
+主要差异集中在 ST7701 初始化寄存器。
+
+> [!NOTE]
+> `base/epass.dtsi` 已声明相同 `compatible`，所以当前 `fragment@2` 不改变最终值。它保留了后续为不同屏幕拆分独立面板描述的空间。
+
+---
+
+### Laowu 专用 `fragment@3`
+
+仅 `laowu.dts` 包含：
 
 ```dts
 fragment@3 {
     target = <&tcon0>;
     __overlay__ {
-        srgn,swap-b-r;
+        cra,swap-b-r;
     };
 };
 ```
 
-`srgn,swap-b-r` 是原项目内核补丁定义的私有布尔属性。`0004-swap_rb_as_config.patch` 读取该属性，并设置 TCON0 控制寄存器中的颜色交换位。
+```mermaid
+flowchart LR
+    A["HSD 初始化表"] --> B["laowu.dts"]
+    B --> C["cra,swap-b-r"]
+    C --> D["TCON0 红蓝交换"]
+```
 
-如果屏幕显示正常但红色与蓝色相反，应优先检查是否选错 `hsd`/`laowu` 配置，而不是在应用程序中交换每个像素的颜色。
-
-该属性名与内核补丁严格绑定。若以后将它重命名为 `cra,swap-b-r`，必须同时修改：
+`cra,swap-b-r` 由：
 
 ```text
-screen/laowu.dts
 board/cra/epass/patch/linux/0004-swap_rb_as_config.patch
 ```
 
-只改一处会使颜色交换失效。
+读取。
 
-## 初始化序列指令
+> [!IMPORTANT]
+> 屏幕显示正常但红蓝互换时，先检查 `screen=hsd` / `screen=laowu` 是否选错，再考虑应用层颜色处理。
 
-`init-sequence` 并不是普通字节数组。它由：
+---
+
+# ST7701 初始化序列
+
+`init-sequence` 不是普通字节数组。
+
+宏定义来自：
 
 ```text
 include/dt-bindings/display/st7701initseq.h
 ```
 
-中的宏编码，再由自定义内核驱动逐项解释。
-
 | 宏 | 参数 | 作用 |
-| --- | --- | --- |
-| `ST7701INIT_BEGIN_WRITE` | 无 | 将 `CS` 拉低，开始一组传输 |
-| `ST7701INIT_WRITE_COMMAND_8` | 1 个命令 | 写入一个 8 位命令 |
-| `ST7701INIT_WRITE_C8_D8` | 1 个命令、1 个数据 | 写入命令及一个数据字节 |
-| `ST7701INIT_WRITE_C8_D16` | 1 个命令、2 个数据 | 写入命令及两个数据字节 |
-| `ST7701INIT_WRITE_BYTES` | 长度、对应数量的数据 | 继续写入指定数量的数据字节 |
-| `ST7701INIT_END_WRITE` | 无 | 将 `CS` 拉高，结束传输 |
-| `ST7701INIT_DELAY` | 毫秒数 | 休眠指定时间 |
+| :--- | :--- | :--- |
+| `ST7701INIT_BEGIN_WRITE` | 无 | CS 拉低，开始一组传输 |
+| `ST7701INIT_WRITE_COMMAND_8` | 1 个命令 | 写入 8 位命令 |
+| `ST7701INIT_WRITE_C8_D8` | 命令 + 1 数据 | 写命令与一个数据字节 |
+| `ST7701INIT_WRITE_C8_D16` | 命令 + 2 数据 | 写命令与两个数据字节 |
+| `ST7701INIT_WRITE_BYTES` | 长度 + 数据 | 连续写入指定数量字节 |
+| `ST7701INIT_END_WRITE` | 无 | CS 拉高 |
+| `ST7701INIT_DELAY` | 毫秒 | 延时 |
 
-例如：
+### 示例
 
 ```dts
 ST7701INIT_BEGIN_WRITE
@@ -252,48 +370,65 @@ ST7701INIT_END_WRITE
 ST7701INIT_DELAY 100
 ```
 
-表示：
+执行顺序：
 
-1. 拉低片选。
-2. 发送命令 `0xFF`。
-3. 紧接着发送五个数据字节。
-4. 发送命令 `0xC1` 和两个数据字节。
-5. 拉高片选。
-6. 等待 100 ms。
+```mermaid
+flowchart LR
+    A["CS Low"] --> B["CMD 0xFF"]
+    B --> C["5 Bytes"]
+    C --> D["CMD 0xC1 + 2 Bytes"]
+    D --> E["CS High"]
+    E --> F["Delay 100 ms"]
+```
 
-驱动不会根据 ST7701 数据手册验证寄存器值，也没有完整检查每条宏指令后是否还存在足够的参数。长度写错、漏写参数或打乱指令边界，可能导致错误初始化，甚至让驱动越过预期数组边界读取数据。
+> [!CAUTION]
+> `WRITE_BYTES` 长度错误、漏参数或指令边界错位都可能造成错误初始化。
 
-## 初始化序列的功能范围
+---
 
-这些长序列主要包含：
+## 初始化序列覆盖范围
 
-- ST7701 扩展命令页选择。
-- 电源、电压和模拟参数。
-- 正负极性 Gamma 曲线。
-- Source/Gate 输出及 GIP 映射。
-- 扫描方向和显示方向相关设置。
-- 像素格式设置。
-- 退出休眠。
-- 开启显示。
-- 各阶段所需延时。
+初始化表主要涉及：
 
-其中部分寄存器属于 ST7701 厂商扩展页，不能只根据通用 MIPI DCS 命令名称推断作用。修改前应取得对应面板和控制器的数据手册，并保留实体屏已验证的初始化表。
+- ST7701 扩展命令页
+- 电源与模拟参数
+- 正 / 负极性 Gamma
+- Source / Gate 输出
+- GIP 映射
+- 扫描方向
+- 显示方向
+- 像素格式
+- Sleep Out
+- Display On
+- 阶段延时
 
-三个序列都包含：
+三种配置都包含：
 
-- `0x11`：退出休眠。
-- `0x29`：开启显示。
-- `0x3A 0x50`：设置当前使用的像素格式。
+```text
+0x11       退出休眠
+0x29       开启显示
+0x3A 0x50  当前像素格式
+```
 
-BOE 与 HSD/Laowu 在 Gamma、电源、时序控制、GIP 映射和等待时间等多处存在差异，不能仅复制文件名后混用。
+> [!WARNING]
+> 厂商扩展页中的寄存器不能仅凭通用 MIPI DCS 命令名称推断作用。修改前应参考对应面板与 ST7701 数据手册，并保留已验证初始化表。
 
-## 三种配置的差异
+---
 
-### `boe.dts`
+# 三种屏幕配置
 
-`boe.dts` 使用独立的初始化表。与 HSD/Laowu 相比，其 Gamma、电源和多组扩展寄存器值均不同。
+## BOE
 
-主要等待阶段为：
+`boe.dts` 使用独立初始化表。
+
+与 HSD / Laowu 相比，其：
+
+- Gamma 参数不同
+- 电源参数不同
+- 扩展寄存器不同
+- GIP 映射不同
+
+主要等待：
 
 ```text
 120 ms
@@ -301,19 +436,19 @@ BOE 与 HSD/Laowu 在 Gamma、电源、时序控制、GIP 映射和等待时间�
 20 ms
 ```
 
-显示开启后还会发送：
+显示开启后额外发送：
 
 ```text
 0x35 0x00
 ```
 
-这一步在 HSD/Laowu 序列中不存在。
+---
 
-### `hsd.dts`
+## HSD
 
-`hsd.dts` 使用另一套 ST7701 初始化表，不启用 TCON0 红蓝通道交换。
+`hsd.dts` 使用另一套 ST7701 初始化表，不启用红蓝交换。
 
-主要等待阶段为：
+主要等待：
 
 ```text
 150 ms
@@ -321,84 +456,108 @@ BOE 与 HSD/Laowu 在 Gamma、电源、时序控制、GIP 映射和等待时间�
 20 ms
 ```
 
-它是当前 `flash.py` 主入口使用的默认参数：
+当前 `flash.py` 主入口：
 
 ```python
 flash("hsd", {...})
 ```
 
-这里的“默认”来自当前烧录脚本调用，不代表所有实体设备都安装 HSD 屏幕。
+> [!NOTE]
+> 这里的默认仅来自当前烧录脚本调用参数，不代表所有实体设备都安装 HSD 屏幕。
 
-### `laowu.dts`
+---
 
-`laowu.dts` 与 `hsd.dts` 的初始化序列逐项相同。两者唯一的源码差异是 `laowu.dts` 增加：
+## Laowu
+
+`laowu.dts` 与 `hsd.dts` 的初始化序列逐项相同。
+
+唯一源码差异：
 
 ```dts
-srgn,swap-b-r;
+cra,swap-b-r;
 ```
 
-因此：
+即：
 
 ```text
 hsd    = HSD 初始化表
 laowu = HSD 初始化表 + TCON0 红蓝交换
 ```
 
-如果未来修改 HSD 初始化序列，应检查 `laowu.dts` 是否也需要同步修改，避免两个本应相同的寄存器表意外分叉。
+> [!IMPORTANT]
+> 修改 HSD 初始化序列时，应同步核对 `laowu.dts`，避免两份原本一致的寄存器表发生意外分叉。
+
+---
+
+## 三种配置对比
+
+| 项目 | BOE | HSD | Laowu |
+| :--- | :---: | :---: | :---: |
+| 独立初始化表 | 是 | 是 | 与 HSD 相同 |
+| 红蓝交换 | 否 | 否 | 是 |
+| 公共 panel compatible | 是 | 是 | 是 |
+| 公共 DRM 时序 | 是 | 是 | 是 |
+| `0x35 0x00` | 有 | 无 | 无 |
+| 主要等待 | 120 / 10 / 20 ms | 150 / 100 / 20 ms | 150 / 100 / 20 ms |
+
+---
 
 ## 内核初始化驱动
 
-ST7701 初始化支持并非 Linux 5.4.99 原生功能，而是由：
+ST7701 初始化能力来自：
 
 ```text
 board/cra/epass/patch/linux/0006-initalize-st7701.patch
 ```
 
-加入内核源码。
-
 该补丁新增：
 
 ```text
 include/dt-bindings/display/st7701initseq.h
-drivers/staging/shirogane/Kconfig
-drivers/staging/shirogane/Makefile
-drivers/staging/shirogane/st7701init.c
+drivers/staging/cra/Kconfig
+drivers/staging/cra/Makefile
+drivers/staging/cra/st7701init.c
 ```
 
-内核配置通过：
+内核配置：
 
 ```text
-CONFIG_SHIROGANE_SIMPLE_ST7701_INIT=y
+CONFIG_CRA_EP_STAGING=y
+CONFIG_CRA_EP_ST7701_INIT=y
 ```
-
-将驱动直接编入内核。
 
 驱动匹配：
 
 ```dts
-compatible = "lattland,st7701-initseq";
+compatible = "cra,st7701-initseq";
 ```
 
-匹配成功后，它会：
+执行流程：
 
-1. 申请 SDA、SCL、CS 和可选 RST GPIO。
-2. 从设备树读取 `init-sequence` 的 32 位单元数组。
-3. 创建工作队列任务。
-4. 在工作队列中异步执行 GPIO 初始化序列。
+```mermaid
+flowchart TB
+    A["匹配 cra,st7701-initseq"]
+    B["申请 SDA / SCL / CS<br/>可选 RST"]
+    C["读取 init-sequence"]
+    D["创建 workqueue"]
+    E["异步执行 GPIO 初始化表"]
 
-当前设备树未声明 RST GPIO，驱动会在没有独立复位脚的情况下继续执行。
+    A --> B --> C --> D --> E
+```
 
-`lattland,*`、`srgn,*` 和 `SHIROGANE_*` 都是原项目遗留的内部命名。它们可以在二次开发中逐步改为 CRA 命名，但必须同步修改设备树、内核补丁、配置符号和所有引用，不能只做字符串替换。
+---
 
-## 编译与打包
+# 编译与启动
 
-Buildroot 的镜像后处理脚本会调用：
+## 编译
+
+Buildroot 镜像后处理脚本调用：
 
 ```text
 board/cra/epass/scripts/mkdt.sh
 ```
 
-该脚本遍历本目录的所有 `.dts` 文件，先使用内核头文件进行 C 预处理：
+预处理：
 
 ```sh
 cpp -nostdinc \
@@ -407,15 +566,13 @@ cpp -nostdinc \
     -P -undef -x assembler-with-cpp
 ```
 
-随后使用：
+编译：
 
 ```sh
 dtc -@ -I dts -O dtb
 ```
 
-生成支持符号重定位的设备树覆盖层。
-
-输出文件为：
+输出：
 
 ```text
 output/images/dt/screen/boe.dtbo
@@ -423,7 +580,9 @@ output/images/dt/screen/hsd.dtbo
 output/images/dt/screen/laowu.dtbo
 ```
 
-`kernel.its` 再将它们分别打包为 FIT 镜像节点：
+### FIT 打包
+
+`kernel.its` 将它们打包为：
 
 ```text
 fdt-screen-boe
@@ -431,47 +590,51 @@ fdt-screen-hsd
 fdt-screen-laowu
 ```
 
-仅仅在本目录新增 `.dts` 文件并不足以让 U-Boot 使用它。新增屏幕类型后还必须同步修改：
-
-```text
-board/cra/epass/scripts/kernel.its
+```mermaid
+flowchart LR
+    A["screen/*.dts"] --> B["cpp"]
+    B --> C["dtc -@"]
+    C --> D["screen/*.dtbo"]
+    D --> E["kernel.its"]
+    E --> F["FIT / boot.itb"]
 ```
 
-为新的 `.dtbo` 建立对应的 `fdt-screen-*` 节点。
+> [!IMPORTANT]
+> 新增 `.dts` 文件后还需要同步修改 `board/cra/epass/scripts/kernel.its`，否则新的 `.dtbo` 不会进入 FIT。
+
+---
 
 ## 启动时选择屏幕
 
-烧录脚本会向启动环境文本写入：
+烧录环境中写入：
 
 ```text
 screen=hsd
 ```
 
-U-Boot 启动时从 SPI-NAND 的 `0xFA000` 位置导入环境，然后执行：
+U-Boot 提取：
 
 ```text
 imxtract $fitaddr fdt-screen-${screen} $dtboaddr
 ```
 
-例如：
-
-```text
-screen=boe
-        ↓
-fdt-screen-boe
-        ↓
-boe.dtbo
-```
-
-提取完成后，U-Boot 使用：
+随后：
 
 ```text
 fdt apply $dtboaddr
 ```
 
-将屏幕覆盖层应用到基础设备树。
+完整关系：
 
-有效值必须与 FIT 节点后缀完全一致：
+```mermaid
+flowchart LR
+    A["screen=boe"] --> B["fdt-screen-boe"]
+    B --> C["boe.dtbo"]
+    C --> D["fdt apply"]
+    D --> E["最终 Device Tree"]
+```
+
+有效值：
 
 ```text
 boe
@@ -479,48 +642,39 @@ hsd
 laowu
 ```
 
-当前仓库中的 `uEnv.txt` 模板没有写入 `screen=`，而 `flash.py` 会在运行时生成包含 `screen` 的 `.bootenv.txt`。因此：
+| 场景 | 屏幕来源 |
+| :--- | :--- |
+| 使用现有 `flash.py` | `flash()` / `flash2()` 第一个参数 |
+| 手动启动环境 | 必须自行提供 `screen=` |
+| `screen` 为空或拼写错误 | U-Boot 无法提取对应 `fdt-screen-*` |
 
-- 使用现有 `flash.py` 时，屏幕类型来自 `flash()` 或 `flash2()` 的第一个参数。
-- 手动生成或修改启动环境时，必须补充有效的 `screen=`。
-- `screen` 为空或拼写错误时，U-Boot 无法提取正确的 `fdt-screen-*` 节点。
+---
 
-## 常见现象与检查方向
+# 故障排查
 
 | 现象 | 优先检查 |
-| --- | --- |
-| 背光亮但无图像 | `screen=` 是否有效、ST7701 初始化是否执行、RGB 时钟和同步信号 |
-| 完全不亮 | PWM 背光、电源、面板连接，不要只检查初始化序列 |
-| 红蓝互换 | `hsd` 与 `laowu` 是否选错，`srgn,swap-b-r` 是否生效 |
-| 颜色层次异常 | RGB565 接线、像素格式、Gamma 表和面板型号 |
-| 图像滚动或撕裂 | 公共 DRM 时序、ST7701 扫描配置、像素时钟 |
-| 图像方向错误 | 初始化表中的扫描方向设置，不要在未确认前修改 TCON |
-| 开机偶尔白屏 | 初始化顺序、延时、供电稳定性及异步初始化时机 |
-| 编译时找不到宏 | Linux 头文件是否已应用 `0006-initalize-st7701.patch` |
-| `.dtbo` 已生成但启动时找不到 | `kernel.its` 是否包含对应 `fdt-screen-*` 节点 |
+| :--- | :--- |
+| 背光亮但无图像 | `screen=`、ST7701 初始化、RGB 时钟、同步信号 |
+| 完全不亮 | PWM 背光、电源、面板连接 |
+| 红蓝互换 | `hsd` / `laowu`、`cra,swap-b-r` |
+| 颜色层次异常 | RGB565 接线、像素格式、Gamma、面板型号 |
+| 图像滚动 / 撕裂 | DRM 时序、ST7701 扫描配置、像素时钟 |
+| 图像方向错误 | 初始化表中的扫描方向 |
+| 偶发白屏 | 初始化顺序、延时、供电、异步初始化时机 |
+| 编译找不到宏 | `0006-initalize-st7701.patch` 是否已应用 |
+| `.dtbo` 已生成但 U-Boot 找不到 | `kernel.its` 是否包含对应节点 |
 
-可通过内核日志搜索原驱动输出：
+日志检查：
 
 ```sh
 dmesg | grep -i st7701
-dmesg | grep -i srgn
+dmesg | grep -i cra
 ```
 
-原驱动成功执行时会输出初始化任务开始和完成信息；选择 `laowu` 时还会输出红蓝交换相关信息。
+---
 
-## 二次开发原则
+<div align="center">
 
-修改本目录前，应先确认实体屏幕型号、排线定义、PCB 连接和已验证的启动配置：
+<sub><b>CRA Electric Pass</b> · Linux screen</sub>
 
-- 严禁在没有面板资料和实体测试条件时随机修改电源、Gamma 或 GIP 寄存器。
-- 严禁假设所有 ST7701 屏幕都能共用同一套初始化序列。
-- 严禁将应用层颜色错误直接归因于面板；先使用纯红、纯绿、纯蓝测试图确认通道顺序。
-- 修改 `ST7701INIT_WRITE_BYTES` 后，必须同步核对长度和实际数据数量。
-- 每组 `BEGIN_WRITE` 都应有对应的 `END_WRITE`。
-- 退出休眠、开启显示及其等待时间应符合面板资料。
-- 调整公共分辨率或同步时序时，应修改并验证 `0002-panel-simple.patch`，而不是只改本目录。
-- 修改红蓝交换属性名时，必须同步修改 `0004-swap_rb_as_config.patch`。
-- 修改初始化驱动兼容字符串或配置符号时，必须同步修改 `0006-initalize-st7701.patch`、基础设备树和屏幕覆盖层。
-- 新增屏幕覆盖层后，必须同步更新 `kernel.its` 和烧录工具中的可选屏幕名称。
-- 实机验证应从已知可恢复的配置开始，并保留串口日志和原始初始化表。
-- 屏幕测试不需要改写整机系统或应用资源；优先只替换启动环境中的 `screen` 选择并观察结果。
+</div>
