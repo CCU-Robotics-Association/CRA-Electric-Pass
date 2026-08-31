@@ -1,12 +1,69 @@
+<div align="center">
+
 # CRA Electric Pass 设备树
 
-其他语言版本：[English](README_EN.md)，[中文](README.md)。
+<sub>Read this in other languages: [English](README_EN.md), [中文](README.md).</sub>
 
-本目录保存 CRA Electric Pass 的板级设备树源码，分为 U-Boot 和 Linux 两套相互独立的配置。当前工程仅面向白银 v0.6 板型。
+</div>
 
-设备树用于描述处理器内部控制器、主板引脚、启动存储、显示系统、接口和外接设备。Linux 或 U-Boot 驱动通过设备树中的节点和 `compatible` 字符串匹配实际硬件。
+> [!NOTE]
+> 本目录保存 CRA Electric Pass 的板级设备树源码，分为 **U-Boot** 与 **Linux** 两套相互独立的配置。
+
+<p align="center">
+  <a href="#目录结构">目录结构</a> ·
+  <a href="#启动阶段">启动阶段</a> ·
+  <a href="#职责边界">职责边界</a> ·
+  <a href="#公共-soc-定义">公共 SoC</a> ·
+  <a href="#u-boot-设备树">U-Boot</a> ·
+  <a href="#linux-设备树">Linux</a> ·
+  <a href="#buildroot-构建关系">构建关系</a> ·
+  <a href="#从源码到启动">完整链路</a> ·
+  <a href="#修改入口">修改入口</a> ·
+  <a href="#构建与验证">构建验证</a>
+</p>
+
+---
 
 ## 目录结构
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### `uboot/`
+
+**SPL / U-Boot 阶段**
+
+负责启动前必须访问的硬件：
+
+- SPI-NAND
+- 启动串口
+- USB DFU
+- MMC
+- 必要 SoC 资源
+
+[查看详细说明](uboot/README.md)
+
+</td>
+<td width="50%" valign="top">
+
+### `linux/`
+
+**Linux 运行阶段**
+
+负责完整板级硬件：
+
+- LCD / 背光
+- 屏幕 Overlay
+- SoC 接口
+- 外接设备
+- Linux 驱动参数
+
+[查看详细说明](linux/README.md)
+
+</td>
+</tr>
+</table>
 
 ```text
 devicetree/
@@ -21,122 +78,178 @@ devicetree/
    └─ README.md
 ```
 
-| 目录 | 使用阶段 | 主要职责 | 详细说明 |
-| --- | --- | --- | --- |
-| `uboot/` | SPL 与 U-Boot | 启动闪存、启动串口、USB DFU、启动阶段 MMC 和必要的 SoC 资源 | [uboot/README.md](uboot/README.md) |
-| `linux/` | Linux | 完整主板硬件、显示链路、屏幕、接口、外接设备和 Linux 驱动参数 | [linux/README.md](linux/README.md) |
+| 目录 | 使用阶段 | 主要职责 |
+| :--- | :---: | :--- |
+| `uboot/` | SPL / U-Boot | 启动闪存、串口、USB DFU、MMC 与启动期 SoC 资源 |
+| `linux/` | Linux | 主板硬件、显示、屏幕、接口、外设与 Linux 驱动参数 |
 
-设备从上电到进入应用程序会经历多个软件阶段：
+---
 
-```text
-Allwinner BROM
-        │
-        ▼
-SPL
-        │
-        ▼
-U-Boot
-        │
-        ├─ 读取启动环境
-        ├─ 读取 boot.itb
-        ├─ 提取 Linux 基础 DTB
-        └─ 应用 Linux DTBO
-        │
-        ▼
-Linux
-        │
-        ▼
-CRA Electric Pass 应用程序
+## 启动阶段
+
+```mermaid
+flowchart TB
+    A["Allwinner BROM"]
+    B["SPL"]
+    C["U-Boot"]
+    D["读取启动环境"]
+    E["读取 boot.itb"]
+    F["提取 Linux Base DTB"]
+    G["应用 Linux DTBO"]
+    H["Linux"]
+    I["CRA Electric Pass 应用程序"]
+
+    A --> B --> C --> D --> E --> F --> G --> H --> I
 ```
 
-SPL 和 U-Boot 必须在 Linux 尚未启动时访问 SPI-NAND、串口和 USB DFU，因此需要一套供启动加载器自身驱动使用的设备树。
+<table>
+<tr>
+<td width="50%" valign="top">
 
-Linux 启动后会重新初始化硬件，并使用另一套更完整的设备树。该设备树描述 LCD、背光、按键、存储、接口和外接设备等 Linux 驱动需要的内容。
+### 启动加载器阶段
 
-两套设备树不会自动同步：
+SPL / U-Boot 在 Linux 尚未运行时访问：
 
-- 修改 `uboot/` 不会改变 Linux 启动后的硬件状态。
-- 修改 `linux/` 不会改变 SPL 或 U-Boot 的硬件初始化。
-- 同一个控制器可能在两套设备树中具有不同的启用状态、引脚配置和用途。
-- 同时影响启动加载器和 Linux 的硬件改动，必须分别检查两套设备树。
+- SPI-NAND
+- UART
+- USB DFU
+- MMC / SD
+- 时钟与基础控制器
 
-## 两套设备树的职责边界
+使用 `devicetree/uboot/`。
 
-| 硬件或功能 | U-Boot 设备树 | Linux 设备树 |
-| --- | --- | --- |
-| SPI-NAND 启动读取 | 必须配置 | 负责 MTD、分区和运行时访问 |
-| 启动串口控制台 | 必须配置 | Linux 串口控制台和普通 UART |
-| USB DFU | 必须配置 | Linux USB Gadget、Host 或其他模式 |
-| SD/MMC 启动阶段访问 | 按启动需求配置 | Linux SD 卡和 MMC 驱动 |
-| LCD 与背光 | 当前不由 U-Boot 接管 | 完整配置 |
-| ST7701 初始化 | 不负责 | 由 Linux 设备树和屏幕覆盖层配置 |
-| LRADC 按键 | 不负责 | 由 Linux 设备树配置 |
-| I²C、I²S、SPI1、UART 扩展 | 通常不需要 | 由 Linux 接口覆盖层配置 |
-| CardKB、ES8311、LSM6DS3 | 不需要 | 由 Linux 外接设备覆盖层配置 |
+</td>
+<td width="50%" valign="top">
 
-当前 U-Boot 配置关闭：
+### Linux 阶段
+
+Linux 重新初始化硬件，并使用另一套更完整的设备树：
+
+- 显示与背光
+- 输入
+- 存储
+- 总线接口
+- 外接设备
+
+使用 `devicetree/linux/`。
+
+</td>
+</tr>
+</table>
+
+> [!IMPORTANT]
+> 两套设备树不会自动同步。修改 `uboot/` 不会改变 Linux 运行期硬件配置；修改 `linux/` 也不会改变 SPL / U-Boot 初始化。
+
+---
+
+## 职责边界
+
+| 硬件 / 功能 | U-Boot 设备树 | Linux 设备树 |
+| :--- | :---: | :---: |
+| SPI-NAND 启动读取 | 必须配置 | MTD、分区与运行时访问 |
+| 启动串口控制台 | 必须配置 | Linux Console / 普通 UART |
+| USB DFU | 必须配置 | Gadget / Host / 其他模式 |
+| SD / MMC 启动访问 | 按启动需求 | Linux SD / MMC |
+| LCD / 背光 | 当前不接管 | 完整配置 |
+| ST7701 初始化 | 不负责 | Screen Overlay |
+| LRADC 按键 | 不负责 | Linux Base |
+| I²C / I²S / SPI1 / UART 扩展 | 通常不需要 | Interface Overlay |
+| CardKB / ES8311 / LSM6DS3 | 不需要 | Ext Overlay |
+
+当前 U-Boot：
 
 ```text
 # CONFIG_VIDEO_SUNXI is not set
 ```
 
+显示初始化由 Linux 阶段负责。
+
+---
+
 ## 公共 SoC 定义
 
-本目录中的 CRA 板级 DTS 并没有重新定义 F1C100S/F1C200S 的所有寄存器和控制器。两套设备树分别引用 Buildroot 中的公共 SUNIV 定义。
+CRA 板级 DTS 不重新定义 F1C100S / F1C200S 的全部寄存器与内部控制器。
 
-U-Boot 公共文件：
+<table>
+<tr>
+<td width="50%" valign="top">
 
-```text
-board/allwinner/suniv-f1c100s/devicetree/uboot/suniv-f1c100s.dtsi
-```
-
-Linux 公共文件：
+### U-Boot 公共定义
 
 ```text
-board/allwinner/suniv-f1c100s/devicetree/linux/suniv-f1c100s.dtsi
+board/allwinner/suniv-f1c100s/
+devicetree/uboot/
+suniv-f1c100s.dtsi
 ```
 
-组合关系为：
+</td>
+<td width="50%" valign="top">
+
+### Linux 公共定义
 
 ```text
-公共 SUNIV SoC 定义
-        │
-        ▼
-CRA 板级基础定义
-        │
-        ▼
-当前板型入口或覆盖层
+board/allwinner/suniv-f1c100s/
+devicetree/linux/
+suniv-f1c100s.dtsi
 ```
 
-公共 `.dtsi` 提供寄存器地址、时钟、复位、中断、DMA、GPIO 和基础控制器节点；CRA 文件负责选择当前 PCB 实际使用的控制器、引脚和参数。
+</td>
+</tr>
+</table>
 
-公共文件来自原项目和对应上游作者。修改时应保留原有 SPDX、版权和提交历史，不应把公共 SoC 定义重新标记为 CRA 原创。
+```mermaid
+flowchart TB
+    A["公共 SUNIV SoC 定义"]
+    B["CRA 板级基础定义"]
+    C["当前板型入口 / Overlay"]
 
-## U-Boot 设备树
+    A --> B --> C
+```
 
-U-Boot 板级入口为：
+公共 `.dtsi` 提供：
+
+- 寄存器地址
+- 时钟与复位
+- 中断与 DMA
+- GPIO / pinctrl
+- 基础控制器节点
+
+CRA 文件负责：
+
+- 当前 PCB 的控制器选择
+- 引脚复用
+- 节点启用状态
+- 板级参数
+
+---
+
+# U-Boot 设备树
+
+板级入口：
 
 ```text
 uboot/suniv-f1c100s-generic.dts
 ```
 
-它通过：
+引用公共 SUNIV：
 
 ```dts
 #include "suniv-f1c100s.dtsi"
 ```
 
-包含公共 SUNIV 定义，并启用当前启动流程需要的：
+### 当前启动资源
 
-- UART0 启动控制台。
-- UART1。
-- SPI0 和 SPI-NAND。
-- USB OTG、USB PHY 与 OTG SRAM。
-- 第一组 MMC。
+| 资源 | 状态 / 用途 |
+| :--- | :--- |
+| UART0 | 启动控制台 |
+| UART1 | 启用 |
+| SPI0 | SPI-NAND 启动 |
+| SPI-NAND | 主启动存储 |
+| USB OTG / PHY / SRAM | DFU / USB Gadget |
+| MMC0 | 第一组 MMC |
+| 第二组 MMC | 关闭，与 SPI0 引脚冲突 |
 
-当前代码显式关闭与 SPI0 引脚冲突的第二组 MMC。
-
-Buildroot 配置引用：
+### Buildroot 引用
 
 ```text
 BR2_TARGET_UBOOT_CUSTOM_DTS_PATH="
@@ -144,30 +257,30 @@ BR2_TARGET_UBOOT_CUSTOM_DTS_PATH="
     board/cra/epass/devicetree/uboot/suniv-f1c100s-generic.dts"
 ```
 
-U-Boot 配置文件：
+配置文件：
 
 ```text
 board/cra/epass/uboot.defconfig
 ```
 
-使用：
+默认设备树：
 
 ```text
 CONFIG_DEFAULT_DEVICE_TREE="suniv-f1c100s-generic"
 ```
 
-选择该板级 DTS。
+---
 
-## Linux 设备树
+# Linux 设备树
 
-Linux 基础设备树由以下文件组成：
+基础入口：
 
 ```text
 linux/base/epass.dtsi
 linux/base/devicetree.dts
 ```
 
-Buildroot 配置引用：
+### Buildroot 引用
 
 ```text
 BR2_LINUX_KERNEL_CUSTOM_DTS_PATH="
@@ -176,242 +289,266 @@ BR2_LINUX_KERNEL_CUSTOM_DTS_PATH="
     board/cra/epass/devicetree/linux/base/devicetree.dts"
 ```
 
-基础包含关系为：
+### 基础关系
 
-```text
-suniv-f1c100s.dtsi
-        ↓
-linux/base/epass.dtsi
-        ↓
-linux/base/devicetree.dts
+```mermaid
+flowchart LR
+    A["suniv-f1c100s.dtsi"] --> B["linux/base/epass.dtsi"]
+    B --> C["linux/base/devicetree.dts"]
 ```
 
-Linux 设备树在基础 DTB 之外还包含三类覆盖层：
+### Overlay 层
 
-| 类型 | 目录 | 是否必选 | 作用 |
-| --- | --- | --- | --- |
-| 屏幕 | `linux/screen/` | 必须选择一个 | 选择 BOE、HSD 或 Laowu 屏幕初始化 |
-| 接口 | `linux/interface/` | 可选，可多个 | 启用 I²C、I²S、SPI、UART、ADC 或 USB 模式 |
-| 外设 | `linux/ext/` | 可选，可多个 | 声明 CardKB、ES8311、LSM6DS3 等设备 |
+<table>
+<tr>
+<td width="33%" valign="top">
 
-U-Boot 按以下顺序组合 Linux 设备树：
+### Screen
+
+`linux/screen/`
+
+**必须选择 1 个**
+
+- BOE
+- HSD
+- Laowu
+
+</td>
+<td width="33%" valign="top">
+
+### Interface
+
+`linux/interface/`
+
+**可选，可多个**
+
+- ADC
+- I²C
+- I²S
+- SPI
+- UART
+- USB
+
+</td>
+<td width="33%" valign="top">
+
+### Ext
+
+`linux/ext/`
+
+**可选，可多个**
+
+- CardKB
+- ES8311
+- LSM6DS3
+
+</td>
+</tr>
+</table>
+
+U-Boot 应用顺序：
 
 ```text
 base → screen → interface → ext
 ```
 
+---
+
 ## Buildroot 构建关系
 
-当前主要版本为：
-
-| 组件 | 版本 |
-| --- | --- |
+| 组件 | 当前版本 |
+| :--- | :---: |
 | Linux | `5.4.99` |
 | U-Boot | `2020.07` |
 
-Buildroot 配置文件：
+主配置：
 
 ```text
 board/cra/epass/cra_epass_defconfig
 ```
 
-其中分别指定：
+该配置统一指定 Linux / U-Boot 版本、Patch、Defconfig、DTS 与镜像后处理脚本。
 
-- Linux 版本、补丁、内核配置和 Linux DTS。
-- U-Boot 版本、补丁、U-Boot 配置和 U-Boot DTS。
-- 镜像后处理脚本。
+### 镜像后处理
 
-镜像后处理顺序为：
-
-```text
-board/cra/epass/scripts/mknanduboot.sh
-        ↓
-board/cra/epass/scripts/mkdt.sh
-        ↓
-board/cra/epass/scripts/buildimage.sh
+```mermaid
+flowchart LR
+    A["mknanduboot.sh"] --> B["mkdt.sh"]
+    B --> C["buildimage.sh"]
 ```
 
-三个脚本的职责如下：
-
 | 脚本 | 作用 |
-| --- | --- |
-| `mknanduboot.sh` | 将普通 SPL/U-Boot 输出整理为当前 SPI-NAND 页布局 |
-| `mkdt.sh` | 编译 Linux 基础 DTB 和所有 DTBO |
-| `buildimage.sh` | 生成 UBI 根文件系统，并根据 `kernel.its` 打包 `boot.itb` |
+| :--- | :--- |
+| `mknanduboot.sh` | 将 SPL / U-Boot 整理为 SPI-NAND 页布局 |
+| `mkdt.sh` | 编译 Linux Base DTB 与全部 DTBO |
+| `buildimage.sh` | 生成 UBI rootfs，并根据 `kernel.its` 打包 `boot.itb` |
+
+---
 
 ## 从源码到启动
 
-整体构建和启动关系为：
+### U-Boot 构建链路
 
-```text
-U-Boot 公共 SUNIV .dtsi
-        +
-CRA uboot/*.dts
-        │
-        ▼
-U-Boot/SPL 构建
-        │
-        ▼
-u-boot-sunxi-with-spl.bin
-        │
-        ▼
-mknanduboot.sh
-        │
-        ▼
-u-boot-sunxi-with-nand-spl.bin
+```mermaid
+flowchart TB
+    A["U-Boot 公共 SUNIV .dtsi"]
+    B["CRA uboot/*.dts"]
+    C["U-Boot / SPL Build"]
+    D["u-boot-sunxi-with-spl.bin"]
+    E["mknanduboot.sh"]
+    F["u-boot-sunxi-with-nand-spl.bin"]
 
-Linux 公共 SUNIV .dtsi
-        +
-linux/base/*.dts*
-        +
-linux/screen/*.dts
-        +
-linux/interface/*.dts
-        +
-linux/ext/*.dts
-        │
-        ▼
-mkdt.sh
-        │
-        ├─ devicetree.dtb
-        └─ *.dtbo
-        │
-        ▼
-kernel.its + zImage
-        │
-        ▼
-buildimage.sh
-        │
-        ▼
-boot.itb
+    A --> C
+    B --> C
+    C --> D --> E --> F
 ```
 
-实体设备启动时：
+### Linux 设备树链路
 
-```text
-SPI-NAND 中的 U-Boot
-        │
-        ├─ 使用 U-Boot 自身设备树初始化启动硬件
-        ├─ 读取 0xFA000 的文本启动环境
-        ├─ 读取 0x100000 的 boot.itb
-        ├─ 提取 Linux 基础 DTB
-        ├─ 应用 screen/interface/ext DTBO
-        └─ 将组合后的 DTB 传给 Linux
+```mermaid
+flowchart TB
+    A["Linux 公共 SUNIV .dtsi"]
+    B["linux/base/*.dts*"]
+    C["linux/screen/*.dts"]
+    D["linux/interface/*.dts"]
+    E["linux/ext/*.dts"]
+    F["mkdt.sh"]
+    G["devicetree.dtb + *.dtbo"]
+    H["kernel.its + zImage"]
+    I["buildimage.sh"]
+    J["boot.itb"]
+
+    A --> F
+    B --> F
+    C --> F
+    D --> F
+    E --> F
+    F --> G --> H --> I --> J
 ```
+
+### 实体设备启动链路
+
+```mermaid
+flowchart TB
+    A["SPI-NAND 中的 U-Boot"]
+    B["使用 U-Boot DT 初始化启动硬件"]
+    C["读取 0xFA000 启动环境"]
+    D["读取 0x100000 boot.itb"]
+    E["提取 Linux Base DTB"]
+    F["应用 screen / interface / ext DTBO"]
+    G["组合后的 DTB"]
+    H["Linux"]
+
+    A --> B --> C --> D --> E --> F --> G --> H
+```
+
+---
 
 ## 生成文件
 
-常见生成物包括：
-
 | 文件 | 来源 | 用途 |
-| --- | --- | --- |
-| `output/images/u-boot-sunxi-with-spl.bin` | U-Boot 构建 | 尚未完成 NAND 页布局处理的 U-Boot 镜像 |
-| `output/images/u-boot-sunxi-with-nand-spl.bin` | `mknanduboot.sh` | 实体 SPI-NAND 使用的最终 U-Boot 镜像 |
-| `output/images/dt/base/devicetree.dtb` | `mkdt.sh` | Linux 基础设备树 |
-| `output/images/dt/screen/*.dtbo` | `mkdt.sh` | 屏幕覆盖层 |
-| `output/images/dt/interface/*.dtbo` | `mkdt.sh` | 接口覆盖层 |
-| `output/images/dt/ext/*.dtbo` | `mkdt.sh` | 外接设备覆盖层 |
-| `output/images/boot.itb` | `buildimage.sh` | Linux 内核、基础 DTB 和全部 DTBO 的 FIT 镜像 |
+| :--- | :--- | :--- |
+| `output/images/u-boot-sunxi-with-spl.bin` | U-Boot Build | 未完成 NAND 页布局处理 |
+| `output/images/u-boot-sunxi-with-nand-spl.bin` | `mknanduboot.sh` | 实体 SPI-NAND 最终 U-Boot |
+| `output/images/dt/base/devicetree.dtb` | `mkdt.sh` | Linux Base DTB |
+| `output/images/dt/screen/*.dtbo` | `mkdt.sh` | Screen Overlay |
+| `output/images/dt/interface/*.dtbo` | `mkdt.sh` | Interface Overlay |
+| `output/images/dt/ext/*.dtbo` | `mkdt.sh` | Ext Overlay |
+| `output/images/boot.itb` | `buildimage.sh` | Kernel + DTB + DTBO FIT |
 
-请勿直接修改：
+> [!WARNING]
+> 请勿直接修改 `output/build/` 或 `output/images/dt/`。这些目录属于构建产物，清理或重新构建后会被覆盖。
 
-```text
-output/build/
-output/images/dt/
-```
-
-这些目录属于构建生成物，清理或重新构建后会被覆盖。长期修改必须写入 `board/cra/epass/devicetree/`、相关配置或构建脚本。
+---
 
 ## 文件类型
 
 | 后缀 | 含义 |
-| --- | --- |
-| `.dtsi` | 可由其他设备树包含的公共源文件 |
-| `.dts` | 可直接编译的设备树入口或设备树覆盖层源码 |
-| `.dtb` | 编译后的基础设备树二进制 |
-| `.dtbo` | 编译后的设备树覆盖层二进制 |
-| `.its` | FIT 镜像的文本描述 |
-| `.itb` | 由 ITS 打包生成的 FIT 二进制镜像 |
+| :--- | :--- |
+| `.dtsi` | 公共设备树源文件，可被其他 DTS 包含 |
+| `.dts` | 设备树入口或 Overlay 源码 |
+| `.dtb` | 编译后的基础设备树 |
+| `.dtbo` | 编译后的设备树覆盖层 |
+| `.its` | FIT 文本描述 |
+| `.itb` | FIT 二进制镜像 |
 
-设备树源码使用 DTS 语法，支持 C 风格注释：
-
-```dts
-/* 块注释 */
-```
-
-当前工程中也存在：
+推荐使用：
 
 ```dts
-// 行注释
+/* C 风格注释 */
 ```
 
-优先使用 `/* ... */`，以保持对设备树工具链的兼容性。
+---
 
-## 修改说明
+# 修改入口
 
-| 需求 | 应修改的位置 |
-| --- | --- |
-| 修改 U-Boot 串口输出 | `uboot/`、`uboot.defconfig` 或 U-Boot 补丁 |
-| 修改 Linux 串口或启用 UART | `linux/base/` 或 `linux/interface/` |
-| 修改 SPL/U-Boot 访问的 SPI-NAND | `uboot/`、U-Boot 配置和补丁 |
-| 修改 Linux MTD 分区 | `linux/base/`，并同步启动参数和镜像布局 |
-| 修改屏幕初始化序列 | `linux/screen/` |
-| 修改 LCD 时序或显示链路 | `linux/base/`、屏幕覆盖层及对应内核补丁 |
-| 修改背光或按键 | `linux/base/` |
-| 启用 I²C、I²S、SPI1、UART | `linux/interface/` |
-| 添加具体外接设备 | `linux/ext/`，并检查所需接口 |
-| 修改 USB DFU | `uboot/`、U-Boot 补丁和配置 |
-| 修改 Linux USB 模式 | `linux/interface/` 和对应 Linux 补丁 |
-| 修改应用程序 UI | 不属于设备树，应修改 `drm_app_neo` |
+| 需求 | 应修改位置 |
+| :--- | :--- |
+| U-Boot 串口输出 | `uboot/`、`uboot.defconfig`、U-Boot patch |
+| Linux UART | `linux/base/` 或 `linux/interface/` |
+| SPL / U-Boot SPI-NAND | `uboot/`、U-Boot config、U-Boot patch |
+| Linux MTD 分区 | `linux/base/` + bootargs + 镜像布局 |
+| 屏幕初始化 | `linux/screen/` |
+| LCD 时序 / 显示链路 | `linux/base/` + screen + kernel patch |
+| 背光 / 按键 | `linux/base/` |
+| I²C / I²S / SPI1 / UART | `linux/interface/` |
+| 外接设备 | `linux/ext/` |
+| U-Boot DFU | `uboot/` + U-Boot patch / config |
+| Linux USB 模式 | `linux/interface/` + Linux patch |
+| 应用程序 UI | `drm_app_neo`，不属于设备树 |
 
-若改动涉及启动存储、串口、USB、时钟或同一组物理引脚，不能只检查表格中的单一位置，必须搜索两套设备树、配置、补丁和脚本中的全部引用。
+> [!IMPORTANT]
+> 涉及启动存储、串口、USB、时钟或共用物理引脚时，应同时搜索两套设备树、配置、补丁与脚本中的全部引用。
 
-## 文件名和标签的联动
+---
 
-修改 DTS 文件名时需要同步检查：
+## 文件名与标签联动
 
-- `cra_epass_defconfig` 中的 `CUSTOM_DTS_PATH`。
-- `uboot.defconfig` 中的 `CONFIG_DEFAULT_DEVICE_TREE`。
-- `mkdt.sh` 的目录和输出规则。
-- `kernel.its` 中的 DTB/DTBO 路径与 FIT 节点。
-- `uboot.env` 中的 FIT 节点提取名称。
-- `uEnv.txt`、`flash.py` 或实际启动环境中的选择值。
-- 各层 README 和构建命令。
+修改 DTS 文件名时同步检查：
 
-修改基础设备树节点标签时，必须搜索所有覆盖层中的引用。例如重命名 `i2c0`、`i2s0`、`pio`、`st7701initseq` 或 `usb_otg` 标签，会导致引用这些标签的 DTBO 无法正确生成或应用。
+```text
+cra_epass_defconfig
+BR2_*_CUSTOM_DTS_PATH
+CONFIG_DEFAULT_DEVICE_TREE
+mkdt.sh
+kernel.its
+uboot.env
+uEnv.txt
+flash.py
+README
+```
 
-## 常见问题
+修改基础节点标签时，同步搜索所有 Overlay 引用：
 
-| 现象 | 优先检查 |
-| --- | --- |
-| 修改 Linux DTS 后 U-Boot 没有变化 | 两套设备树独立，需修改 `uboot/` |
-| 修改 U-Boot DTS 后 Linux 驱动没有变化 | Linux 使用 `linux/` 下的另一套设备树 |
-| 新增覆盖层已经生成但启动时找不到 | 是否同步添加到 `kernel.its` |
-| 修改覆盖层后实体设备仍使用旧配置 | 是否重新生成 `boot.itb`，启动分区是否仍为旧镜像 |
-| 修改 U-Boot DTS 后未生效 | 是否清理并重新构建 U-Boot |
-| DTBO 编译成功但应用失败 | 基础 DTB 是否保留符号，标签和 `target` 是否存在 |
-| 多个接口单独可用、组合后失败 | 是否存在 GPIO、时钟、DMA、中断或总线资源冲突 |
-| 屏幕无显示或颜色异常 | `screen` 选择、初始化序列、RGB 通道和内核显示补丁 |
-| USB 启动阶段和 Linux 阶段行为不同 | 分别检查 U-Boot USB 配置和 Linux USB 覆盖层 |
-| Windows 下修改后脚本构建失败 | `.sh` 是否被转换为 CRLF |
-| 修改源码后输出仍未更新 | 是否使用了旧的 `output/build` 或 `output/images` 缓存 |
+```text
+i2c0
+i2s0
+pio
+st7701initseq
+usb_otg
+```
+
+> [!CAUTION]
+> 标签或文件名改动未同步到 Overlay、FIT 和启动环境时，DTBO 可能无法生成、打包或在 U-Boot 阶段正确应用。
+
+---
 
 ## 构建与验证
 
-完整配置与构建：
+### 完整构建
 
 ```sh
 make cra_epass_defconfig
 make
 ```
 
-构建后检查 FIT 内容：
+### 检查 FIT
 
 ```sh
 output/host/bin/mkimage -l output/images/boot.itb
 ```
 
-反编译 Linux 基础设备树：
+### 反编译 Linux Base DTB
 
 ```sh
 dtc -I dtb -O dts \
@@ -419,7 +556,7 @@ dtc -I dtb -O dts \
     output/images/dt/base/devicetree.dtb
 ```
 
-反编译 U-Boot 设备树：
+### 反编译 U-Boot DTB
 
 ```sh
 dtc -I dtb -O dts \
@@ -427,27 +564,23 @@ dtc -I dtb -O dts \
     output/build/uboot-2020.07/u-boot.dtb
 ```
 
-检查时应确认：
+### 检查项
 
-- U-Boot DTB 只启用了启动阶段实际需要的控制器。
-- Linux 基础 DTB 包含 DTBO 所需的符号。
-- `kernel.its` 引用的每个 DTB 和 DTBO 都实际存在。
-- FIT 节点名称与启动环境中的 `screen`、`interface`、`ext` 完全一致。
-- 没有同时启用占用相同物理引脚的控制器。
-- `boot.itb` 总大小未超过 U-Boot `checkfit` 的 5 MiB 限制。
-- 最终 U-Boot 文件为经过 NAND 布局处理的 `u-boot-sunxi-with-nand-spl.bin`。
+- U-Boot DTB 只启用启动阶段需要的控制器
+- Linux Base DTB 包含 DTBO 需要的 symbols
+- `kernel.its` 引用的 DTB / DTBO 均存在
+- FIT 节点名称与 `screen` / `interface` / `ext` 完全一致
+- 没有同时启用冲突引脚
+- `boot.itb` 不超过 U-Boot `checkfit` 的 **5 MiB**
+- 最终 U-Boot 使用 `u-boot-sunxi-with-nand-spl.bin`
 
-设备树编译成功只代表语法、引用和结构满足工具要求，不代表硬件电平、PCB 接线、时序、驱动依赖和所有覆盖层组合已经验证。
+> [!NOTE]
+> 设备树编译成功只代表语法、引用与结构满足工具链要求，不代表 PCB、电平、时序、驱动依赖与 Overlay 组合已经通过实机验证。
 
-## 二次开发原则
+---
 
-- 修改前先判断问题发生在 SPL/U-Boot 阶段还是 Linux 阶段。
-- 不应为了统一外观而强行让两套设备树包含相同节点。
-- 修改公共 SUNIV `.dtsi` 前，应确认改动是否真的适用于所有引用该文件的板级配置。
-- 修改 `compatible` 时，必须同步检查匹配它的 U-Boot 或 Linux 驱动。
-- 修改引脚组时，必须搜索两套设备树及全部覆盖层中的物理引脚占用。
-- 修改启动存储布局时，必须同步检查 U-Boot、Linux MTD、UBI、启动环境、镜像脚本和烧录工具。
-- 新增 Linux 覆盖层后，必须同步更新 `kernel.its` 和启动环境。
-- 不应直接修改 `output/build` 或 `output/images/dt` 中的生成文件。
-- 所有由 Linux 或 Buildroot 执行的脚本必须保持 LF 换行。
-- 在实体设备验证前，应完成干净构建、DTB/DTBO 反编译检查、FIT 节点检查，并保留可恢复镜像和串口恢复方式。
+<div align="center">
+
+<sub><b>CRA Electric Pass</b> · Device Tree architecture</sub>
+
+</div>
