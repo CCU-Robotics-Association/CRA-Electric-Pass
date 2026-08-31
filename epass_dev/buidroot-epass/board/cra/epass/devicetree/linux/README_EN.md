@@ -1,18 +1,87 @@
-# CRA Electric Pass Linux Device Tree
+<div align="center">
 
-Read this in other languages: [English](README_EN.md), [中文](README.md).
+# CRA Electric Pass Linux Device Trees
 
-This directory contains the base device tree and device tree overlays used by CRA Electric Pass during the Linux stage. The current project targets the Shirogane v0.6 board revision only.
+<sub>Read this in other languages: [English](README_EN.md), [中文](README.md).</sub>
 
-These files describe the mainboard hardware, display, SoC interfaces, and external devices available after Linux starts. The device tree used by SPL and U-Boot themselves is located at:
+</div>
+
+> [!NOTE]
+> This directory contains the base device tree and device-tree overlays used by CRA Electric Pass during the Linux stage.
+
+> [!IMPORTANT]
+> The Linux device tree is independent of the device trees used by SPL and U-Boot themselves.
+
+The SPL / U-Boot device trees are located at:
 
 ```text
 board/cra/epass/devicetree/uboot/
 ```
 
-The two device trees are independent. Changes made in this directory do not automatically alter the hardware configuration used during SPL or U-Boot.
+<p align="center">
+  <a href="#directory-structure">Directory Structure</a> ·
+  <a href="#device-tree-composition">Composition</a> ·
+  <a href="#base-device-tree">Base</a> ·
+  <a href="#screen-overlays">Screen</a> ·
+  <a href="#interface-overlays">Interface</a> ·
+  <a href="#external-device-overlays">Ext</a> ·
+  <a href="#compilation-and-fit-packaging">Compilation and Packaging</a> ·
+  <a href="#u-boot-boot-composition">Boot Composition</a> ·
+  <a href="#common-dependencies-and-conflicts">Dependencies and Conflicts</a>
+</p>
+
+---
 
 ## Directory Structure
+
+<table>
+<tr>
+<td width="25%" valign="top">
+
+### `base/`
+
+**DTB**
+
+Fixed main-board hardware and base nodes.
+
+[Details](base/README_EN.md)
+
+</td>
+<td width="25%" valign="top">
+
+### `screen/`
+
+**DTBO**
+
+LCD model selection and ST7701 initialization.
+
+[Details](screen/README_EN.md)
+
+</td>
+<td width="25%" valign="top">
+
+### `interface/`
+
+**DTBO**
+
+SoC controllers, GPIO pin multiplexing, and USB modes.
+
+[Details](interface/README_EN.md)
+
+</td>
+<td width="25%" valign="top">
+
+### `ext/`
+
+**DTBO**
+
+Specific external devices connected to the interfaces.
+
+[Details](ext/README_EN.md)
+
+</td>
+</tr>
+</table>
 
 ```text
 devicetree/linux/
@@ -40,55 +109,47 @@ devicetree/linux/
    └─ lsm6ds3_pre0.4.dts
 ```
 
-The four subdirectories have the following responsibilities:
+| Directory | Generated type | Responsibility |
+| :--- | :---: | :--- |
+| `base/` | DTB | Describes fixed main-board hardware and provides the nodes and labels referenced by other overlays |
+| `screen/` | DTBO | Selects the ST7701 initialization sequence and display-specific behavior for the LCD |
+| `interface/` | DTBO | Enables SoC controllers, selects pin multiplexing, or switches USB operating modes |
+| `ext/` | DTBO | Declares specific peripherals attached to interfaces that have already been enabled |
 
-| Directory | Output type | Responsibility | Details |
-| --- | --- | --- | --- |
-| `base/` | DTB | Describes hardware that is always present on the mainboard and provides nodes and labels referenced by overlays | [base/README.md](base/README.md) |
-| `screen/` | DTBO | Selects the ST7701 initialization sequence and display-specific behavior for the installed LCD | [screen/README.md](screen/README.md) |
-| `interface/` | DTBO | Enables SoC controllers, selects pin multiplexing, or changes the USB operating mode | [interface/README.md](interface/README.md) |
-| `ext/` | DTBO | Declares specific external devices connected through the corresponding interfaces | [ext/README.md](ext/README.md) |
+---
 
-## Device Tree Composition
+## Device-Tree Composition
 
-The final device tree used by Linux is not produced by compiling a single `.dts` file. U-Boot assembles it dynamically from a base DTB and one or more DTBO files:
+U-Boot dynamically combines the base DTB with one or more DTBO files to produce the device tree used by Linux.
 
-```text
-Allwinner SUNIV SoC definitions
-board/allwinner/suniv-f1c100s/devicetree/linux/suniv-f1c100s.dtsi
-        │
-        ▼
-Shared CRA mainboard definition
-base/epass.dtsi
-        │
-        ▼
-Shirogane v0.6 base entry point
-base/devicetree.dts
-        │
-        ▼
-screen overlay
-        │
-        ▼
-interface overlays (zero or more)
-        │
-        ▼
-ext overlays (zero or more)
-        │
-        ▼
-U-Boot passes the assembled DTB to Linux
+```mermaid
+flowchart TB
+    A["Allwinner SUNIV SoC<br/>suniv-f1c100s.dtsi"]
+    B["Shared CRA main board<br/>base/epass.dtsi"]
+    C["Silver v0.6 base entry point<br/>base/devicetree.dts"]
+    D["screen overlay<br/>exactly 1 required"]
+    E["interface overlays<br/>0 to N"]
+    F["ext overlays<br/>0 to N"]
+    G["Final DTB"]
+    H["Linux"]
+
+    A --> B --> C --> D --> E --> F --> G --> H
 ```
 
-The application order is fixed:
+Fixed application order:
 
 ```text
 base → screen → interface → ext
 ```
 
-If several overlays modify the same property, a later overlay may replace a value set earlier. If different overlays enable controllers that use the same pins, the device tree may still compile successfully, but the Linux drivers can encounter resource conflicts at runtime.
+> [!WARNING]
+> An overlay applied later may override properties written by an earlier one. Device trees can merge successfully even when multiple controllers claim the same physical pins; such resource conflicts often become visible only when Linux drivers probe the hardware.
+
+---
 
 ## Base Device Tree
 
-The Buildroot configuration provides the shared SoC definition, the shared CRA mainboard definition, and the current board entry point to the Linux build system through:
+The Buildroot configuration supplies three layers of base definitions to the Linux build system through:
 
 ```text
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
@@ -98,38 +159,38 @@ BR2_LINUX_KERNEL_CUSTOM_DTS_PATH="
     board/cra/epass/devicetree/linux/base/devicetree.dts"
 ```
 
-The base files are included in this order:
-
-```text
-suniv-f1c100s.dtsi
-        ↓
-epass.dtsi
-        ↓
-devicetree.dts
+```mermaid
+flowchart LR
+    A["suniv-f1c100s.dtsi"] --> B["epass.dtsi"]
+    B --> C["devicetree.dts"]
+    C --> D["devicetree.dtb"]
 ```
 
-Their roles are:
+| File | Purpose |
+| :--- | :--- |
+| `suniv-f1c100s.dtsi` | Shared controller definitions for the F1C100S / F1C200S SoC |
+| `epass.dtsi` | Device identity, display, power, backlight, GPIO, SPI-NAND, UART, SD, USB, video engine, and default peripheral states |
+| `devicetree.dts` | Base entry point that adds the power-off GPIO, ST7701 initialization pins, and LRADC buttons |
 
-- `epass.dtsi` describes the device identity, display pipeline, power supplies, backlight, GPIO multiplexing, SPI-NAND, serial ports, SD interface, USB, video engine, and default peripheral states.
-- `devicetree.dts` is the only base entry point currently used for Shirogane v0.6. It adds the power-off GPIO, ST7701 initialization pins, and LRADC key parameters.
-
-The generated file is:
+Generated file:
 
 ```text
 output/images/dt/base/devicetree.dtb
 ```
 
+---
+
 ## Screen Overlays
 
-One screen overlay matching the physical LCD must be selected at boot:
+At boot, exactly one screen overlay matching the physical LCD must be selected.
 
 | Boot value | Source file | Main difference |
-| --- | --- | --- |
-| `screen=boe` | `screen/boe.dts` | ST7701 initialization sequence for the BOE display |
-| `screen=hsd` | `screen/hsd.dts` | ST7701 initialization sequence for the HSD display |
-| `screen=laowu` | `screen/laowu.dts` | Uses the HSD initialization sequence and swaps the TCON0 red and blue channels |
+| :--- | :--- | :--- |
+| `screen=boe` | `screen/boe.dts` | BOE ST7701 initialization sequence |
+| `screen=hsd` | `screen/hsd.dts` | HSD ST7701 initialization sequence |
+| `screen=laowu` | `screen/laowu.dts` | HSD initialization sequence plus TCON0 red/blue channel swapping |
 
-The generated files are:
+Output:
 
 ```text
 output/images/dt/screen/boe.dtbo
@@ -137,71 +198,108 @@ output/images/dt/screen/hsd.dtbo
 output/images/dt/screen/laowu.dtbo
 ```
 
-If `screen` is empty or does not match an available name, U-Boot cannot extract the correct `fdt-screen-*` node from the FIT image. Display initialization will be unavailable, and the boot process may also fail.
+```mermaid
+flowchart LR
+    A["screen=boe"] --> D["fdt-screen-boe"]
+    B["screen=hsd"] --> E["fdt-screen-hsd"]
+    C["screen=laowu"] --> F["fdt-screen-laowu"]
+```
+
+> [!CAUTION]
+> If `screen` is empty or does not match a FIT node name, U-Boot cannot extract the correct screen overlay. Display initialization will be unavailable, and the boot process may also fail.
+
+---
 
 ## Interface Overlays
 
-`interface/` enables internal SoC controllers and selects pin layouts. It does not describe specific devices connected to those buses.
-
-The available names are:
+`interface/` enables internal SoC controllers and selects pin layouts. It does not declare specific devices on those buses.
 
 | Boot value | Purpose |
-| --- | --- |
-| `adc_pa1` | Adds the PA1 ADC input to the default PA0 input |
-| `adc_pa123` | Enables all four ADC inputs on PA0-PA3 |
-| `i2c0` | Enables the hardware I²C0 controller |
+| :--- | :--- |
+| `adc_pa1` | Adds PA1 as an ADC pin alongside the default PA0 |
+| `adc_pa123` | Enables all four ADC pins from PA0 through PA3 |
+| `i2c0` | Enables hardware I²C0 |
 | `i2s0_pa` | Enables I²S0 with the PA pin layout |
 | `i2s0_pe` | Enables I²S0 with the PE pin layout |
-| `spi1` | Enables SPI1 and the predefined Spidev child device |
+| `spi1` | Enables SPI1 and the predefined Spidev node |
 | `uart1` | Enables UART1 |
 | `uart2` | Enables UART2 |
-| `usbhost` | Forces the USB OTG controller into host mode |
-| `usbhs` | Requests the project-specific USB High-Speed mode |
+| `usbhost` | Forces USB OTG into Host mode |
+| `usbhs` | Requests the project's custom USB High-Speed mode |
 
-Several names can be separated by spaces in the boot environment:
+Separate multiple interfaces with spaces:
 
 ```text
 interface=i2c0 uart1
 ```
 
-U-Boot applies them in the order in which they are written. Every interface name must exactly match both the source filename and the corresponding FIT-node suffix.
+U-Boot applies them in the order listed.
+
+> [!IMPORTANT]
+> Each interface name must match both its source-file name and the corresponding FIT node suffix.
+
+---
 
 ## External-Device Overlays
 
-`ext/` describes specific devices connected to the mainboard interfaces. An external-device overlay usually depends on an interface overlay that enables the required controller first.
+`ext/` describes specific peripherals connected to main-board interfaces.
 
 | Boot value | External device | Main dependency |
-| --- | --- | --- |
+| :--- | :--- | :--- |
 | `cardkb` | M5Stack Unit CardKB | `interface=i2c0` |
-| `es8311_sound` | Everest ES8311 audio codec | Select an appropriate I²S0 interface layout |
+| `es8311_sound` | Everest ES8311 audio codec | `i2s0_pa` or `i2s0_pe` |
 | `lsm6ds3_pre0.4` | ST LSM6DS3 six-axis inertial sensor | `interface=i2c0`, with the PE2 conflict resolved |
 
-For example:
+Typical composition:
 
 ```text
 interface=i2c0
 ext=cardkb
 ```
 
-Several external-device names can also be separated by spaces:
+Separate multiple external devices with spaces as well:
 
 ```text
 ext=cardkb lsm6ds3_pre0.4
 ```
 
-Before enabling an external device, verify the power supply, logic levels, bus address, physical wiring, and pin multiplexing. A device tree that compiles successfully is not necessarily suitable for the connected hardware.
+```mermaid
+flowchart TB
+    I2C["interface=i2c0"]
+    I2S["interface=i2s0_pa / i2s0_pe"]
 
-## Compilation
+    CARD["ext=cardkb"]
+    LSM["ext=lsm6ds3_pre0.4"]
+    ES["ext=es8311_sound"]
 
-The device trees are generated by the Buildroot image post-processing script:
+    I2C --> CARD
+    I2C --> LSM
+    I2S --> ES
+```
+
+> [!WARNING]
+> Before enabling a peripheral, verify its power supply, logic levels, bus address, physical wiring, and GPIO pin multiplexing. A DTBO that compiles successfully is not necessarily safe to use on the current physical hardware.
+
+---
+
+## Compilation and FIT Packaging
+
+### Device-Tree Compilation
+
+Unified build script:
 
 ```text
 board/cra/epass/scripts/mkdt.sh
 ```
 
-The script iterates over the `.dts` files in `base/`, `interface/`, `ext/`, and `screen/`.
+```mermaid
+flowchart LR
+    A["*.dts / *.dtsi"] --> B["cpp"]
+    B --> C["dtc -@"]
+    C --> D["DTB / DTBO"]
+```
 
-Each source file is first expanded by the C preprocessor:
+C preprocessing:
 
 ```sh
 cpp -nostdinc \
@@ -210,15 +308,15 @@ cpp -nostdinc \
     -P -undef -x assembler-with-cpp
 ```
 
-It is then compiled into a DTB or DTBO with:
+DTC:
 
 ```sh
 dtc -@ -I dts -O dtb
 ```
 
-`-@` preserves the symbols and fixup information required by overlays, allowing each DTBO to reference labels such as `&i2c0`, `&i2s0`, `&pio`, `&uart1`, and `&usb_otg` from the base device tree.
+`-@` preserves the symbols and fixup information required by overlays, allowing DTBO files to reference labels in the base device tree.
 
-The generated directory structure is:
+Output structure:
 
 ```text
 output/images/dt/
@@ -234,72 +332,67 @@ output/images/dt/
    └─ *.dtbo
 ```
 
-`mkdt.sh` currently hard-codes the Linux source directory as `linux-5.4.99`. If the kernel is upgraded, both header search paths in the script must be updated accordingly.
+> [!WARNING]
+> `mkdt.sh` currently references the Linux `5.4.99` header paths directly. When upgrading Linux, update both include paths in the script.
 
-## Packaging into `boot.itb`
+### FIT Packaging
 
-After the device trees have been generated:
+Packaging description:
 
 ```text
 board/cra/epass/scripts/kernel.its
 ```
 
-packages the Linux kernel, the base DTB, and every DTBO into the FIT image:
+Final image:
 
 ```text
 output/images/boot.itb
 ```
 
-The FIT nodes follow these naming rules:
-
-| File type | FIT node |
-| --- | --- |
+| File type | FIT node naming |
+| :--- | :--- |
 | Linux kernel | `kernel` |
 | Base device tree | `fdt-base` |
 | Screen overlay | `fdt-screen-<name>` |
 | Interface overlay | `fdt-iface-<name>` |
 | External-device overlay | `fdt-ext-<name>` |
 
-For example:
+Example:
 
-```text
-screen/boe.dtbo
-        ↓
-fdt-screen-boe
-
-interface/i2c0.dtbo
-        ↓
-fdt-iface-i2c0
-
-ext/cardkb.dtbo
-        ↓
-fdt-ext-cardkb
+```mermaid
+flowchart LR
+    A["screen/boe.dtbo"] --> D["fdt-screen-boe"]
+    B["interface/i2c0.dtbo"] --> E["fdt-iface-i2c0"]
+    C["ext/cardkb.dtbo"] --> F["fdt-ext-cardkb"]
 ```
 
-`mkdt.sh` automatically compiles every `.dts` file in these directories, but `kernel.its` does not discover new files automatically. Whenever an overlay is added, removed, or renamed, `kernel.its` must be updated as well. Otherwise, the generated file will not be included in `boot.itb`.
+> [!IMPORTANT]
+> `mkdt.sh` automatically compiles the `.dts` files in these directories, but `kernel.its` does not discover new files automatically. Update `kernel.its` whenever an overlay is added, removed, or renamed.
 
-## Assembly During U-Boot
+---
 
-The default U-Boot environment is stored in:
+## U-Boot Boot Composition
+
+Default U-Boot environment:
 
 ```text
 board/cra/epass/uboot.env
 ```
 
-At boot, U-Boot first reads the text environment from offset `0xFA000` in SPI-NAND, then extracts the base device tree from `boot.itb`:
+U-Boot first extracts the base device tree:
 
 ```text
 imxtract $fitaddr fdt-base $dtbaddr
 ```
 
-It then extracts and applies the selected screen overlay:
+Screen overlay:
 
 ```text
 imxtract $fitaddr fdt-screen-${screen} $dtboaddr
 fdt apply $dtboaddr
 ```
 
-The interface and external-device overlays are processed sequentially in loops:
+Interface and external-device overlays:
 
 ```text
 for ov in ${interface}
@@ -311,46 +404,41 @@ for ov in ${ext}
     fdt apply $dtboaddr
 ```
 
-The complete sequence is:
+Complete flow:
 
-```text
-Read fdt-base
-        ↓
-Apply fdt-screen-${screen}
-        ↓
-Apply each fdt-iface-${interface}
-        ↓
-Apply each fdt-ext-${ext}
-        ↓
-Append bootargs
-        ↓
-bootz
+```mermaid
+flowchart TB
+    A["Read fdt-base"]
+    B["Apply fdt-screen-${screen}"]
+    C["Apply each fdt-iface-${interface}"]
+    D["Apply each fdt-ext-${ext}"]
+    E["Append bootargs"]
+    F["bootz"]
+    G["Linux"]
+
+    A --> B --> C --> D --> E --> F --> G
 ```
+
+---
 
 ## Boot Environment
 
-The template stored in the repository is:
+Template:
 
 ```text
 board/cra/epass/uEnv.txt
 ```
 
-It currently contains:
+Current defaults:
 
 ```text
 interface=
 ext=
 ```
 
-Optional interface and external-device overlays are therefore disabled by default.
+The existing `flash.py` writes `screen=` to the generated `.bootenv.txt` at runtime.
 
-The template itself does not define `screen=`. The existing `flash.py` generates `.bootenv.txt` at runtime and writes the screen type from the first argument passed to `flash()` or `flash2()`:
-
-```text
-screen=hsd
-```
-
-When creating or editing the boot environment manually, a valid `screen` value must be supplied. A complete example is:
+Complete example:
 
 ```text
 screen=hsd
@@ -358,59 +446,82 @@ interface=i2c0
 ext=cardkb
 ```
 
-Every name in the boot environment must exactly match the suffix of the corresponding FIT node in `kernel.its`, including letter case, underscores, and periods.
+| Field | Rule |
+| :--- | :--- |
+| `screen` | Must be a valid screen name |
+| `interface` | Zero or more values separated by spaces |
+| `ext` | Zero or more values separated by spaces |
+| Name matching | Must exactly match the corresponding FIT node suffix |
+
+> [!CAUTION]
+> Letter case, underscores, and periods are all part of a name. If the boot environment does not match the suffix used in `kernel.its`, U-Boot cannot extract the corresponding overlay.
+
+---
 
 ## Common Dependencies and Conflicts
 
-The following table is only an overview. Refer to the README in each subdirectory for exact pins and restrictions:
+| Combination | Description |
+| :--- | :--- |
+| `cardkb` + `i2c0` | CardKB depends on hardware I²C0 |
+| `lsm6ds3_pre0.4` + `i2c0` | LSM6DS3 depends on hardware I²C0 |
+| `es8311_sound` + `i2s0_pa` / `i2s0_pe` | ES8311 audio data depends on I²S0 |
+| `i2s0_pa` / `i2s0_pe` | Only one of the two I²S0 pinctrl layouts may normally be selected |
+| `adc_pa1` / `adc_pa123` | Only one of the two ADC pin ranges may normally be selected |
+| `usbhost` + `usbhs` | Both modify the USB controller and must be validated before use together |
+| `lsm6ds3_pre0.4` + power-off control | Both use PE2 |
+| ADC / UART1 / I²S0 PA | Some configurations share PA1 through PA3 |
+| UART2 / SPI1 | PE7 and PE8 overlap |
 
-| Combination | Notes |
-| --- | --- |
-| `cardkb` + `i2c0` | CardKB requires the hardware I²C0 controller |
-| `lsm6ds3_pre0.4` + `i2c0` | LSM6DS3 requires the hardware I²C0 controller |
-| `es8311_sound` + `i2s0_pa` or `i2s0_pe` | ES8311 audio data requires I²S0 |
-| `i2s0_pa` and `i2s0_pe` | Only one I²S0 pin layout should be selected |
-| `adc_pa1` and `adc_pa123` | Only one of the two ADC pin ranges should normally be selected |
-| `usbhost` and `usbhs` | Both modify the same USB controller and must not be enabled together without verification |
-| `lsm6ds3_pre0.4` and power-off control | Both involve PE2 and must be checked against the board revision |
-| ADC, UART1, and the I²S0 PA layout | Some configurations reuse PA1-PA3 and must be checked individually |
-| UART2 and SPI1 | Some pins overlap on PE7 and PE8 and must be checked before combining them |
+```mermaid
+flowchart LR
+    A["Overlay compiles successfully"] --> B["U-Boot applies it successfully"]
+    B --> C["Linux driver probes successfully"]
+    C --> D["Physical hardware works correctly"]
+```
 
-U-Boot does not detect these hardware conflicts automatically. Successfully applying an overlay only proves that the device tree structures can be merged; it does not prove that the PCB routing, electrical connections, and Linux drivers can operate together.
+> [!IMPORTANT]
+> Success at one stage does not replace validation at the next. U-Boot does not check GPIO assignments, logic levels, power supplies, or electrical conflicts between peripherals.
 
-## Adding a New Device Tree Configuration
+---
 
-Use the following sequence when adding a configuration:
+## Adding a New Device-Tree Configuration
 
-1. Decide whether it belongs in `base`, `screen`, `interface`, or `ext`.
-2. Create the `.dts` file in the appropriate directory and reference labels already defined by the base device tree. If a required label does not exist, first add a stable definition under `base/`.
-3. Check pin multiplexing, power, logic levels, bus addresses, interrupts, and conflicts with other overlays.
-4. Run the build and confirm that `mkdt.sh` generates the corresponding DTB or DTBO.
-5. Add a FIT node to `kernel.its` that follows the established naming rules.
-6. Use a name in the boot environment that exactly matches the FIT-node suffix.
-7. Confirm that `boot.itb` actually contains the new node.
-8. Retain a recoverable image and serial logs before testing on the physical device.
+```mermaid
+flowchart TB
+    A["Choose a category<br/>base / screen / interface / ext"]
+    B["Create DTS / DTSI"]
+    C["Check pinctrl / power / levels / address / IRQ"]
+    D["Run the build"]
+    E["Confirm DTB / DTBO output"]
+    F["Update kernel.its"]
+    G["Configure the boot-environment name"]
+    H["Inspect boot.itb"]
+    I["Prepare a recovery path and retain serial logs"]
+    J["Validate on the physical device"]
 
-Do not edit:
+    A --> B --> C --> D --> E --> F --> G --> H --> I --> J
+```
+
+Do not edit the following directory directly:
 
 ```text
 output/images/dt/
 ```
 
-This directory contains generated build output. It is deleted and recreated the next time `mkdt.sh` runs. All persistent changes must be made in the `.dts` or `.dtsi` sources in this directory, or in the corresponding build scripts.
+It contains generated build artifacts and is deleted and recreated whenever `mkdt.sh` runs.
 
-## Building and Inspection
+---
 
-For a complete build, run:
+## Build and Inspection
+
+### Complete Build
 
 ```sh
 make cra_epass_defconfig
 make
 ```
 
-If only the related images need to be regenerated, the project's rebuild workflow may be used, but confirm that Linux, the device trees, and the FIT image are not being taken from stale build output.
-
-After building, inspect:
+Check these outputs:
 
 ```text
 output/images/dt/base/devicetree.dtb
@@ -420,13 +531,13 @@ output/images/dt/ext/*.dtbo
 output/images/boot.itb
 ```
 
-List the nodes in the FIT image with:
+### List FIT Nodes
 
 ```sh
 output/host/bin/mkimage -l output/images/boot.itb
 ```
 
-The generated base device tree can be decompiled for inspection:
+### Decompile the Base DTB
 
 ```sh
 dtc -I dtb -O dts \
@@ -434,23 +545,19 @@ dtc -I dtb -O dts \
     output/images/dt/base/devicetree.dtb
 ```
 
-Verify the following:
+### Checklist
 
-- The base DTB contains the symbols required by the overlays.
-- Every file referenced by `kernel.its` exists.
-- The FIT node selected by `screen` exists.
-- Every name in `interface` and `ext` maps to the correct node.
-- Controllers that use the same physical pins have not been enabled accidentally.
-- The total size of `boot.itb` does not exceed the 5 MiB limit enforced by U-Boot `checkfit`.
+- The base DTB contains the symbols required by the overlays
+- Every file referenced by `kernel.its` exists
+- The FIT node selected by `screen` exists
+- The `interface` and `ext` names map to the correct FIT nodes
+- Controllers that occupy the same physical pins are not enabled together by mistake
+- The total size of `boot.itb` does not exceed the **5 MiB** limit enforced by U-Boot `checkfit`
 
-## Secondary-Development Principles
+---
 
-- Before changing a base-node label, search for every overlay that references it.
-- When changing a `compatible` string, also inspect the corresponding Linux driver or kernel patch.
-- Whenever a `.dts` file is added, update `kernel.its` as well.
-- When renaming a file, update the FIT node, boot environment, and documentation together.
-- Do not place a specific external device directly under `interface/`; keep interfaces and devices in separate layers.
-- Do not resolve one overlay conflict by silently overriding an unrelated property in another overlay.
-- Do not assume that a hardware combination works merely because DTC compiled it successfully.
-- All scripts executed by Linux or Buildroot must use LF line endings.
-- After making changes, complete the build, inspect the FIT nodes, and decompile the resulting device tree before testing on physical hardware.
+<div align="center">
+
+<sub><b>CRA Electric Pass</b> · Linux Device Tree architecture</sub>
+
+</div>
