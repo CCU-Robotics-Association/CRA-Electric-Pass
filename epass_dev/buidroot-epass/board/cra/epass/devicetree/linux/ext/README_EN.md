@@ -1,49 +1,109 @@
-# CRA Electric Pass External Device Overlays
+<div align="center">
 
-Read this in other languages: [English](README_EN.md), [中文](README.md).
+# CRA Electric Pass External-Device Overlays
 
-This directory contains the Linux device tree overlays for optional hardware connected to the CRA Electric Pass board.
+<sub>Read this in other languages: [English](README_EN.md), [中文](README.md).</sub>
 
-These files are applied to the base device tree only when requested during U-Boot startup. The current project targets the Shirogane v0.6 hardware revision only.
+</div>
 
-## Files
+> [!NOTE]
+> This directory contains Linux device-tree overlays for optional hardware connected to CRA Electric Pass board interfaces. U-Boot applies these overlays to the base device tree only when they are selected at boot.
 
-| File | External Device | Bus and Address |
-| --- | --- | --- |
-| `cardkb.dts` | M5Stack Unit CardKB mini keyboard | Hardware I²C0 at address `0x5f` |
-| `es8311_sound.dts` | Everest ES8311 audio codec | GPIO-driven I²C at address `0x18`; audio data is transferred over I²S0 |
-| `lsm6ds3_pre0.4.dts` | ST LSM6DS3 six-axis inertial sensor | Hardware I²C0 at address `0x6a`; interrupt on PE2 |
+<p align="center">
+  <a href="#file-overview">File Overview</a> ·
+  <a href="#device-tree-hierarchy">Device-Tree Hierarchy</a> ·
+  <a href="#overlay-basics">Overlay Syntax</a> ·
+  <a href="#cardkbdts"><code>cardkb</code></a> ·
+  <a href="#es8311_sounddts"><code>es8311_sound</code></a> ·
+  <a href="#lsm6ds3_pre04dts"><code>lsm6ds3_pre0.4</code></a> ·
+  <a href="#dependencies-and-conflicts">Dependencies and Conflicts</a> ·
+  <a href="#build-and-boot">Build and Boot</a>
+</p>
 
-## Relationship to the Other Device Tree Directories
+---
 
-The Linux device tree is assembled in the following order:
+## File Overview
 
-```text
-Linux suniv-f1c100s.dtsi
-        ↓
-base/epass.dtsi
-        ↓
-base/devicetree.dts
-        ↓
-screen overlay
-        ↓
-interface overlay
-        ↓
-ext overlay
-        ↓
-U-Boot starts Linux
+<table>
+<tr>
+<td width="33%" valign="top">
+
+### `cardkb.dts`
+
+**M5Stack Unit CardKB**
+
+- Bus: hardware I²C0
+- Address: `0x5f`
+- Pins: PD0 / PD12
+- Input method: polling
+- Linux subsystem: Input
+
+</td>
+<td width="33%" valign="top">
+
+### `es8311_sound.dts`
+
+**Everest ES8311**
+
+- Control: GPIO-based bit-banged I²C
+- Address: `0x18`
+- Audio: I²S0
+- I²C pins: PD0 / PD12
+- Linux subsystem: ALSA / ASoC
+
+</td>
+<td width="33%" valign="top">
+
+### `lsm6ds3_pre0.4.dts`
+
+**ST LSM6DS3**
+
+- Bus: hardware I²C0
+- Address: `0x6a`
+- Interrupt: PE2
+- Applicability: not applicable
+- Linux subsystem: IIO
+
+</td>
+</tr>
+</table>
+
+| File | External device | Bus and address |
+| :--- | :--- | :--- |
+| `cardkb.dts` | M5Stack Unit CardKB keypad | Hardware I²C0 · `0x5f` |
+| `es8311_sound.dts` | Everest ES8311 audio codec | GPIO-based bit-banged I²C · `0x18`; audio data uses I²S0 |
+| `lsm6ds3_pre0.4.dts` | ST LSM6DS3 six-axis inertial sensor | Hardware I²C0 · `0x6a`; interrupt on PE2 |
+
+---
+
+## Device-Tree Hierarchy
+
+```mermaid
+flowchart TB
+    A["Linux suniv-f1c100s.dtsi"]
+    B["base/epass.dtsi"]
+    C["base/devicetree.dts"]
+    D["screen overlay"]
+    E["interface overlay"]
+    F["ext overlay"]
+    G["U-Boot boots Linux"]
+
+    A --> B --> C --> D --> E --> F --> G
 ```
 
-Each directory has a distinct role:
+| Directory | Responsibility |
+| :--- | :--- |
+| `base/` | Describes the base hardware that is always present on the main board |
+| `screen/` | Selects the installed LCD panel and its timings |
+| `interface/` | Enables SoC controllers and configures pin multiplexing for I²C0, I²S0, SPI1, UART, and other interfaces |
+| `ext/` | Declares specific external devices after the required bus has been enabled |
 
-- `base/` describes the core hardware that is always present on the board.
-- `screen/` selects the installed LCD panel and its timing parameters.
-- `interface/` enables SoC controllers and configures pin multiplexing for interfaces such as I²C0, I²S0, SPI1, and UART.
-- `ext/` declares the specific external devices connected to buses that have already been enabled.
+> [!IMPORTANT]
+> An `ext/` overlay usually depends on the corresponding `interface/` overlay. CardKB requires `interface/i2c0.dts` to be enabled first.
 
-For example, CardKB is an `ext` device, but it depends on `interface/i2c0.dts` to enable the hardware I²C0 controller first.
+---
 
-## Basic Overlay Syntax
+## Overlay Basics
 
 Every file in this directory is a Device Tree Overlay:
 
@@ -55,37 +115,41 @@ Every file in this directory is a Device Tree Overlay:
     fragment@1 {
         target = <&some_node>;
         __overlay__ {
-            /* Properties or nodes to add or override */
+            /* Device-tree contents to add or override */
         };
     };
 };
 ```
 
-The main elements are:
+| Field | Purpose |
+| :--- | :--- |
+| `/dts-v1/;` | Declares the device-tree source version |
+| `/plugin/;` | Declares that the current file is an attachable overlay |
+| `fragment@1` | An overlay fragment; its number distinguishes it from other fragments |
+| `target` | References a node in the base device tree by label |
+| `target-path` | Selects the target node by path |
+| `__overlay__` | Contains properties and child nodes to add or override |
+| `compatible` | Linux driver matching string |
+| `reg` | Address of an I²C or similar bus device |
+| `status = "okay"` | Explicitly enables a node |
 
-- `/dts-v1/;` declares the device tree source format.
-- `/plugin/;` declares that the file is an overlay that can be applied to a base device tree.
-- `fragment@1` defines an overlay fragment. Its number only distinguishes it from other fragments.
-- `target` identifies the base device tree node to modify by referencing its label.
-- `target-path` identifies the node to modify by its path.
-- `__overlay__` contains the properties and child nodes to add or override.
-- `compatible` provides the compatibility string that Linux uses to match the device with a driver.
-- `reg` specifies the device address on a bus such as I²C.
-- `status = "okay"` explicitly enables a node. A newly created node without a `status` property is also treated as available by default.
-
-In the following declaration, the name before the colon is a label and the name after it is the node name:
+Label declaration:
 
 ```dts
 es8311: es8311@18
 ```
 
-Other nodes can refer to this device as `&es8311`. The label is primarily an internal device tree reference and does not necessarily match the device name exposed by Linux.
+Other nodes can reference the device with:
 
-## `cardkb.dts`
+```dts
+&es8311
+```
 
-### Purpose
+---
 
-`cardkb.dts` describes an M5Stack Unit CardKB mini keyboard:
+# `cardkb.dts`
+
+## Device Node
 
 ```dts
 fragment@1 {
@@ -100,13 +164,14 @@ fragment@1 {
 };
 ```
 
-### I²C0 Dependency
+### Bus Relationship
 
-```dts
-target = <&i2c0>;
+```mermaid
+flowchart LR
+    A["F1C200S I²C0"] --> B["PD0 / SDA"]
+    A --> C["PD12 / SCL"]
+    A --> D["CardKB<br/>0x5f"]
 ```
-
-This adds CardKB as a child of the F1C200S hardware I²C0 controller.
 
 I²C0 is disabled by default in the base device tree:
 
@@ -118,64 +183,78 @@ I²C0 is disabled by default in the base device tree:
 };
 ```
 
-CardKB therefore requires both of the following settings:
+Enable it with:
 
 ```text
 interface=i2c0
 ext=cardkb
 ```
 
-Hardware I²C0 uses:
+| Signal | GPIO |
+| :--- | :--- |
+| SDA | PD0 |
+| SCL | PD12 |
+| I²C address | `0x5f` |
 
-```text
-PD0  = SDA
-PD12 = SCL
-```
+---
 
-### Device Address
-
-```dts
-reg = <0x5f>;
-```
-
-The 7-bit I²C address of CardKB is `0x5f`. This value should not be changed unless the peripheral firmware actually uses a different address.
-
-### Polling Interval
+## Polling Parameters
 
 ```dts
 polling-interval = <50>;
 ```
 
-The driver reads the keyboard every 50 ms, giving a polling rate of approximately 20 Hz:
+The current polling interval is **50 ms**, or approximately **20 Hz**.
 
-- Decreasing this value reduces input latency but increases I²C traffic and CPU wakeups.
-- Increasing this value reduces system overhead but makes key response slower.
-- The current 50 ms interval is suitable for ordinary keyboard input.
+| Adjustment | Effect |
+| :--- | :--- |
+| Decrease | Reduces input latency but increases I²C traffic and CPU wakeups |
+| Increase | Reduces system load but slows key response |
+| Current value | Suitable for ordinary keypad input |
 
-### Linux Driver
+---
 
-The CardKB driver is added to the Linux kernel by:
+## Linux Driver
+
+Kernel patch:
 
 ```text
 board/cra/epass/patch/linux/0009-m5stack-cardkb-driver.patch
 ```
 
-The relevant kernel configuration options are:
+Related configuration:
 
 ```text
 CONFIG_INPUT_EVDEV=y
-CONFIG_SHIROGANE_KEYBOARD_CARDKB=m
+CONFIG_CRA_EP_CARDKB=m
 ```
 
-The driver reads one byte at a time over I²C, converts CardKB codes into standard Linux key events, and registers an input device under `/dev/input/event*`. Its key map includes letters, numbers, punctuation, arrow keys, and Shift and Ctrl combinations.
+The driver reads key values over I²C, converts them into standard Linux key events, and registers an input device at `/dev/input/event*`.
 
-`=m` means that the driver is built as a kernel module. Once the device tree node is present, Linux can match and load the module through `compatible = "m5stack,cardkb"`.
+> [!NOTE]
+> `=m` means that the driver is built as a module. After the device-tree node appears, Linux can match it to the driver through `compatible = "m5stack,cardkb"`.
 
-## `es8311_sound.dts`
+---
 
-### Structure
+# `es8311_sound.dts`
 
-The ES8311 overlay adds two sections beneath the device tree root:
+## Functional Structure
+
+```mermaid
+flowchart TB
+    A["sound_i2s<br/>simple-audio-card"]
+    B["F1C200S I²S0"]
+    C["ES8311 Codec"]
+    D["i2c_bitbang<br/>GPIO-based bit-banged I²C"]
+    E["PD0 / PD12"]
+
+    A --> B
+    A --> C
+    D --> C
+    E --> D
+```
+
+Device-tree structure:
 
 ```text
 /
@@ -184,13 +263,15 @@ The ES8311 overlay adds two sections beneath the device tree root:
     └── es8311@18
 ```
 
-Their roles are:
+| Link | Purpose |
+| :--- | :--- |
+| I²C | Configures ES8311 registers |
+| I²S | Transfers digital audio data |
+| `simple-audio-card` | Combines the F1C200S I²S0 controller and ES8311 into an ALSA sound card |
 
-- `sound_i2s` combines the F1C200S I²S0 interface and the ES8311 into an ALSA sound card.
-- `i2c_bitbang` uses ordinary GPIO pins to implement a software-driven I²C bus for configuring ES8311 registers.
-- I²C carries control commands, while I²S carries digital audio data. Both connections are required.
+---
 
-### Sound Card Node
+## Sound-Card Node
 
 ```dts
 sound_i2s {
@@ -202,20 +283,20 @@ sound_i2s {
 };
 ```
 
-The properties mean:
+| Field | Configuration |
+| :--- | :--- |
+| Sound-card driver | `simple-audio-card` |
+| Sound-card name | `es8311` |
+| Data format | I²S |
+| MCLK ratio | Sample rate × 256 |
 
-- `simple-audio-card` selects the generic Linux ASoC simple sound card driver.
-- `simple-audio-card,name` names the sound card `es8311`.
-- `simple-audio-card,format = "i2s"` selects the standard I²S data format.
-- `simple-audio-card,mclk-fs = <256>` sets the master clock frequency to 256 times the sample rate.
-
-For example, at a 48 kHz sample rate:
+Example at 48 kHz:
 
 ```text
-48000 × 256 = 12.288MHz
+48000 × 256 = 12.288 MHz
 ```
 
-### CPU DAI and Codec DAI
+### CPU DAI / Codec DAI
 
 ```dts
 simple-audio-card,cpu {
@@ -227,15 +308,16 @@ simple-audio-card,codec {
 };
 ```
 
-These nodes connect the SoC I²S0 digital audio interface to the ES8311 codec:
-
-```text
-F1C200S I²S0 ←→ ES8311
+```mermaid
+flowchart LR
+    A["F1C200S I²S0"] <--> B["ES8311"]
 ```
 
-### I²S0 Interface Dependency
+---
 
-I²S0 is not enabled by the base device tree. When using the ES8311, select exactly one of the following interface overlays according to the actual PCB routing:
+## I²S0 Interface Dependency
+
+I²S0 is not enabled by default in the base device tree. When using the ES8311, select the pin layout that matches the PCB routing:
 
 ```text
 interface=i2s0_pa
@@ -247,18 +329,17 @@ or:
 interface=i2s0_pe
 ```
 
-The two pin layouts are:
+| Interface | Pins |
+| :--- | :--- |
+| `i2s0_pa` | PE3, PA2, PA3, and PA1 |
+| `i2s0_pe` | PE3, PE5, PE6, and PA1 |
 
-```text
-i2s0_pa: PE3, PA2, PA3, PA1
-i2s0_pe: PE3, PE5, PE6, PA1
-```
+> [!WARNING]
+> The two I²S0 pin groups cannot be enabled simultaneously. Both layouts use PA1; `i2s0_pa` also uses PA2 and PA3, which conflict with some ADC interface configurations.
 
-They must not be enabled together, and the choice must not be inferred from the file name alone. Selecting the wrong pin group prevents the sound card from transferring audio correctly.
+---
 
-Both layouts use PA1 and therefore conflict with ADC interface configurations that also use PA1. `i2s0_pa` additionally uses PA2 and PA3, so it has a wider range of possible conflicts.
-
-### GPIO-Driven I²C
+## GPIO-Based Bit-Banged I²C
 
 ```dts
 i2c_bitbang {
@@ -270,28 +351,23 @@ i2c_bitbang {
 };
 ```
 
-This node uses:
+| Item | Configuration |
+| :--- | :--- |
+| SDA | PD0 |
+| SCL | PD12 |
+| GPIO mode | Open Drain |
+| Half-period delay | 5 μs |
+| Estimated frequency | Approximately 100 kHz |
 
-```text
-PD0  = SDA
-PD12 = SCL
-```
-
-`GPIO_OPEN_DRAIN` configures the pins with the open-drain behavior required by I²C.
-
-```dts
-i2c-gpio,delay-us = <5>;
-```
-
-This introduces an approximate 5 μs delay per half-cycle. A full clock period is therefore about 10 μs, corresponding to an I²C frequency of roughly 100 kHz in standard mode.
-
-The kernel must enable:
+Kernel configuration:
 
 ```text
 CONFIG_I2C_GPIO=y
 ```
 
-### ES8311 Node
+---
+
+## ES8311 Node
 
 ```dts
 es8311: es8311@18 {
@@ -303,18 +379,18 @@ es8311: es8311@18 {
 };
 ```
 
-The properties mean:
+| Field | Purpose |
+| :--- | :--- |
+| `reg = <0x18>` | ES8311 7-bit I²C address |
+| `compatible = "everest,es8311"` | Matches the ES8311 ASoC codec driver |
+| `es8311:` | Provides a label for the sound-card node to reference |
+| `#sound-dai-cells = <0>` | No additional arguments are required when referencing the DAI |
 
-- `reg = <0x18>` specifies the 7-bit I²C address of the ES8311.
-- `compatible = "everest,es8311"` matches the ES8311 ASoC codec driver.
-- `es8311:` provides the label referenced by the sound card node.
-- `#sound-dai-cells = <0>` means that no additional argument is required when referencing this digital audio interface.
+---
 
-The node currently contains `pinctrl-names = "default"` without a corresponding `pinctrl-0`, so it does not assign any additional pins. The property may remain, but it has little effect in its current form.
+## Linux Driver
 
-### Linux Driver
-
-The relevant kernel configuration options are:
+Related kernel configuration:
 
 ```text
 CONFIG_SOUND=m
@@ -326,34 +402,47 @@ CONFIG_SND_SIMPLE_CARD=m
 CONFIG_I2C_GPIO=y
 ```
 
-The I²S clock changes and ES codec drivers are added by:
+Related patch:
 
 ```text
 board/cra/epass/patch/linux/0010-i2s-and-es-driver.patch
 ```
 
-The patch contains drivers not only for the ES8311 but also for codecs such as the ES8156, ES8375, and ES8389. The current kernel configuration selects only the ES8311.
+The patch also contains codec drivers for the ES8156, ES8375, ES8389, and other devices. The current kernel configuration selects only the ES8311.
 
-### Conflict with Hardware I²C0
+---
 
-Both the F1C200S hardware I²C0 controller and the software-driven I²C bus in this overlay use PD0 and PD12.
+## Conflict with Hardware I²C0
 
-The following combination must therefore not be used with the current implementation:
+Hardware I²C0 and the GPIO-based bit-banged I²C bus in `es8311_sound` both use:
+
+```text
+PD0  = SDA
+PD12 = SCL
+```
+
+The following combination must therefore not be enabled:
 
 ```text
 interface=i2c0
 ext=es8311_sound
 ```
 
-Otherwise, two separate Linux I²C controllers would compete for the same physical pins.
+```mermaid
+flowchart LR
+    A["Hardware I²C0"] --> C["PD0 / PD12"]
+    B["GPIO-based bit-banged I²C"] --> C
+    C --> D["Pin conflict"]
+```
 
-This also means that the current ES8311 overlay cannot be enabled directly alongside CardKB or LSM6DS3, both of which depend on hardware I²C0. If these devices must coexist in the future, the device tree should be redesigned so that they share the same hardware I²C0 controller instead of using hardware I²C0 and GPIO-driven I²C simultaneously.
+> [!CAUTION]
+> The current `es8311_sound` overlay cannot be enabled together with CardKB or LSM6DS3, both of which depend on hardware I²C0. Supporting these devices simultaneously requires redesigning the device-tree bus topology.
 
-## `lsm6ds3_pre0.4.dts`
+---
 
-### Purpose
+# `lsm6ds3_pre0.4.dts`
 
-This overlay describes an ST LSM6DS3 six-axis inertial sensor:
+## Device Node
 
 ```dts
 fragment@1 {
@@ -369,66 +458,67 @@ fragment@1 {
 };
 ```
 
-The LSM6DS3 contains:
+The LSM6DS3 provides:
 
-- A three-axis accelerometer.
-- A three-axis gyroscope.
+- Three-axis accelerometer
+- Three-axis gyroscope
 
-Linux manages this device through the IIO (Industrial I/O) subsystem rather than registering it as an ordinary keyboard-style input device.
+Linux manages the device through the **IIO (Industrial I/O)** subsystem.
 
-### I²C0 Dependency
+---
 
-```dts
-target = <&i2c0>;
-reg = <0x6a>;
-```
+## I²C0 Dependency
 
-The LSM6DS3 is connected to hardware I²C0 at address `0x6a`.
+| Item | Configuration |
+| :--- | :--- |
+| Controller | Hardware I²C0 |
+| Address | `0x6a` |
+| SDA | PD0 |
+| SCL | PD12 |
 
-On the older hardware for which this overlay was designed, it requires:
+CardKB uses address `0x5f`, while the LSM6DS3 uses `0x6a`. Based on their addresses alone, both devices can share the same hardware I²C0 bus.
 
-```text
-interface=i2c0
-ext=lsm6ds3_pre0.4
-```
+---
 
-CardKB uses address `0x5f`, while the LSM6DS3 uses `0x6a`. Based on their I²C addresses alone, both devices can reside on the same hardware I²C0 bus.
-
-### Interrupt Configuration
+## Interrupt Configuration
 
 ```dts
 interrupt-parent = <&pio>;
 interrupts = <4 2 2>;
 ```
 
-The three values mean:
+| Value | Meaning |
+| :---: | :--- |
+| `4` | GPIO port E |
+| `2` | Pin 2 |
+| `2` | Falling-edge trigger |
+
+In other words:
 
 ```text
-4 = GPIO bank E
-2 = pin 2
-2 = falling-edge trigger
+PE2 = LSM6DS3 interrupt input
 ```
 
-The sensor therefore uses PE2 as a falling-edge interrupt input.
+The trailing numeric value `2` can be replaced with `IRQ_TYPE_EDGE_FALLING` in a future cleanup.
 
-The last `2` is a raw numeric value. For better readability, a future revision could include the interrupt type header and express the same setting as `IRQ_TYPE_EDGE_FALLING`; the current form is nevertheless valid in both syntax and value.
+---
 
-### Linux Driver
-
-The relevant kernel configuration options are:
+## Linux Driver
 
 ```text
 CONFIG_IIO=y
 CONFIG_IIO_ST_LSM6DSX=m
 ```
 
-The LSM6DS3 uses the ST LSM6DSX IIO driver already present in Linux 5.4.99. It does not depend on a project-specific sensor driver patch.
+The LSM6DS3 uses the ST LSM6DSX IIO driver already included in Linux 5.4.99 and does not depend on a project-specific sensor-driver patch.
 
-### Power-Off Pin Conflict
+---
 
-The `pre0.4` suffix indicates that this overlay is intended only for hardware revisions earlier than 0.4.
+## PE2 Conflict
 
-The current base device tree already assigns PE2 to the power-off circuit:
+`lsm6ds3_pre0.4` is no longer useful for the current hardware.
+
+The base device tree now assigns PE2 to power-off control:
 
 ```dts
 poweroff: gpio-poweroff {
@@ -438,24 +528,59 @@ poweroff: gpio-poweroff {
 };
 ```
 
-PE2 would therefore be declared simultaneously as:
-
-```text
-LSM6DS3 interrupt input
-        and
-device power-off control output
+```mermaid
+flowchart LR
+    A["LSM6DS3<br/>interrupt input"] --> C["PE2"]
+    B["gpio-poweroff<br/>power-off output"] --> C
+    C --> D["Functional conflict"]
 ```
 
-These two uses cannot coexist on the current device. Enabling the overlay may result in:
+Possible consequences include:
 
-- Failure to request the LSM6DS3 interrupt GPIO.
-- Failure of `gpio-poweroff` to claim PE2.
-- The device remaining powered after Linux completes its shutdown sequence.
-- A pin direction or signal level that does not match the hardware design.
+- Failure to request the LSM6DS3 interrupt GPIO
+- Failure by `gpio-poweroff` to request PE2
+- The device remaining powered after Linux shuts down
+- A pin direction or logic level that does not match the hardware
 
-For this reason, `lsm6ds3_pre0.4` must not be enabled on the current physical device, even though the overlay can be compiled and applied successfully.
+> [!CAUTION]
+> Even if `lsm6ds3_pre0.4` compiles and applies successfully, it must not be enabled on the current Electric Pass hardware.
 
-## Build Process
+---
+
+## Dependencies and Conflicts
+
+| Extension | Required interface | Pins used | Main conflicts |
+| :--- | :--- | :--- | :--- |
+| `cardkb` | `i2c0` | PD0, PD12 | Conflicts with the GPIO-based bit-banged I²C bus in `es8311_sound` |
+| `es8311_sound` | `i2s0_pa` or `i2s0_pe` | I²C: PD0, PD12; I²S: selected by the interface | Conflicts with hardware I²C0; I²S conflicts with some ADC configurations |
+| `lsm6ds3_pre0.4` | `i2c0` | I²C: PD0, PD12; interrupt: PE2 | PE2 conflicts with `gpio-poweroff` |
+
+### Composition
+
+```mermaid
+flowchart TB
+    I2C["interface=i2c0"]
+    I2SPA["interface=i2s0_pa"]
+    I2SPE["interface=i2s0_pe"]
+
+    CARD["ext=cardkb"]
+    ES["ext=es8311_sound"]
+    LSM["ext=lsm6ds3_pre0.4"]
+
+    I2C --> CARD
+    I2C --> LSM
+    I2SPA --> ES
+    I2SPE --> ES
+
+    CARD -. "PD0 / PD12 conflict" .- ES
+    LSM -. "PD0 / PD12 conflict" .- ES
+```
+
+---
+
+## Build and Boot
+
+### Compilation Flow
 
 `board/cra/epass/scripts/mkdt.sh` processes every `.dts` file in this directory:
 
@@ -468,7 +593,7 @@ cpp -nostdinc \
 dtc -@ -I dts -O dtb
 ```
 
-The generated files are placed in:
+Generated files:
 
 ```text
 output/images/dt/ext/cardkb.dtbo
@@ -476,9 +601,11 @@ output/images/dt/ext/es8311_sound.dtbo
 output/images/dt/ext/lsm6ds3_pre0.4.dtbo
 ```
 
-The `-@` option preserves the symbols and fixup information required by overlays, allowing U-Boot to resolve labels such as `&i2c0`, `&pio`, and `&i2s0` from the base device tree.
+`-@` preserves the symbols and fixup information required by overlays, allowing U-Boot to resolve labels such as `&i2c0`, `&pio`, and `&i2s0` in the base device tree.
 
-`board/cra/epass/scripts/kernel.its` then packages these files into the FIT image as:
+### FIT Packaging
+
+`board/cra/epass/scripts/kernel.its` packages the overlays as:
 
 ```text
 fdt-ext-cardkb
@@ -486,9 +613,20 @@ fdt-ext-es8311_sound
 fdt-ext-lsm6ds3_pre0.4
 ```
 
-## Selecting Overlays at Boot
+```mermaid
+flowchart LR
+    A["ext/*.dts"] --> B["cpp"]
+    B --> C["dtc -@"]
+    C --> D["ext/*.dtbo"]
+    D --> E["kernel.its"]
+    E --> F["FIT / boot.itb"]
+```
 
-The current project template at `board/cra/epass/uEnv.txt` contains:
+---
+
+## Selection at Boot
+
+The defaults in `board/cra/epass/uEnv.txt` are:
 
 ```text
 interface=
@@ -497,54 +635,46 @@ ext=
 
 No interface or external-device overlay is enabled by default.
 
-U-Boot accepts space-separated overlay names and applies the `interface` overlays before the `ext` overlays:
+U-Boot applies overlays in this order:
 
-```text
-patchinterface
-        ↓
-patchext
+```mermaid
+flowchart LR
+    A["patchinterface"] --> B["patchext"]
 ```
 
-Each overlay name must exactly match the corresponding FIT node suffix. For example:
+Example:
 
 ```text
 interface=i2c0
 ext=cardkb
 ```
 
-Do not enable an external-device overlay merely for testing until the physical wiring, power supply, signal levels, and pin multiplexing have all been verified.
+The overlay name must exactly match the suffix of its FIT node.
 
-## Dependency and Conflict Summary
+> [!WARNING]
+> Before enabling an overlay, verify the wiring, power supply, logic levels, and pin multiplexing on the physical board.
 
-| Extension | Required Interface | Pins Used | Main Conflicts |
-| --- | --- | --- | --- |
-| `cardkb` | `i2c0` | PD0, PD12 | Conflicts with the GPIO-driven I²C bus in the current `es8311_sound` overlay. |
-| `es8311_sound` | `i2s0_pa` or `i2s0_pe` | I²C: PD0, PD12; I²S: determined by the selected interface | Conflicts with hardware I²C0; its I²S pins also conflict with some ADC configurations. |
-| `lsm6ds3_pre0.4` | `i2c0` | I²C: PD0, PD12; interrupt: PE2 | PE2 conflicts with the device's `gpio-poweroff` node. |
+---
 
-## Build Warning Notes
+## Compilation Warnings
 
-When an overlay is compiled on its own, `dtc` may emit warnings about `reg`, `#address-cells`, or parent-bus information. These warnings can occur because the standalone overlay compiler cannot see the complete context of the target node in the base device tree.
+When an overlay is compiled separately, `dtc` may emit warnings about `reg`, `#address-cells`, or parent-bus information. The standalone compilation step does not have the full context of the target node in the base device tree.
 
-To determine whether an overlay is genuinely usable, verify all of the following:
+Overlay validation should confirm that:
 
-1. The `.dts` is successfully compiled into a `.dtbo`.
-2. The overlay can be applied correctly to the base `.dtb`.
-3. U-Boot applies `interface` and `ext` in the correct order.
-4. Linux successfully matches the device with its driver.
-5. The physical pins, signal levels, addresses, and interrupts agree with the device tree.
+- Each `.dts` file can be compiled into a `.dtbo`
+- The overlay applies correctly to the base `.dtb`
+- U-Boot applies overlays in `interface` → `ext` order
+- The Linux driver binds successfully
+- The pins, logic levels, addresses, and interrupts match the physical hardware
 
-Successful compilation alone does not mean that an overlay is safe to use on the current hardware.
+> [!IMPORTANT]
+> A successful build confirms only that the syntax and generation flow are valid. It does not mean that the overlay is safe to enable on the current hardware.
 
-## Modification Guidelines
+---
 
-Confirm the schematic and PCB routing before modifying this directory:
+<div align="center">
 
-- Never change an I²C address arbitrarily.
-- Never assign the same GPIO group to two controllers.
-- Never reuse one pin as both an interrupt input and a power-control output.
-- Before changing `compatible`, confirm the driver's device match table.
-- After adding a peripheral, update `kernel.its` as well; otherwise, the generated `.dtbo` will not be packaged into the FIT image.
-- After adding a driver, review `linux.defconfig` and the corresponding kernel patches.
-- Before deleting a historical overlay, confirm that compatibility with the relevant older hardware revision is no longer required.
+<sub><b>CRA Electric Pass</b> · Linux external device</sub>
 
+</div>
