@@ -1,39 +1,88 @@
+<div align="center">
+
 # CRA Electric Pass Base Device Tree
 
-Read this in other languages: [English](README_EN.md), [中文](README.md).
+<sub>Read this in other languages: [English](README_EN.md), [中文](README.md).</sub>
 
-This directory contains the Linux base device tree for CRA Electric Pass. The current project targets the Shirogane v0.6 hardware revision only.
+</div>
 
-## Files
+> [!NOTE]
+> This directory contains the base Linux device tree for CRA Electric Pass.
 
-| File | Purpose |
-| --- | --- |
-| `epass.dtsi` | Describes the shared hardware of the electronic pass, including the model identifier, LCD display pipeline, power supplies, backlight, GPIO pin multiplexing, SPI-NAND, UART, SD, USB, video engine, and the default state of the core peripherals. |
-| `devicetree.dts` | Serves as the final base device tree entry point for the physical board. It includes `epass.dtsi` and adds the power-off GPIO, ST7701 initialization pins, and LRADC key parameters. |
+<p align="center">
+  <a href="#file-overview">File Overview</a> ·
+  <a href="#composition">Composition</a> ·
+  <a href="#epassdtsi"><code>epass.dtsi</code></a> ·
+  <a href="#devicetreedts"><code>devicetree.dts</code></a> ·
+  <a href="#overlay">Overlay</a> ·
+  <a href="#build-and-validation">Build and Validation</a>
+</p>
 
-The generated base device tree is:
+---
+
+## File Overview
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### `epass.dtsi`
+
+Shared hardware description for the Electric Pass.
+
+It covers:
+
+- Device identity
+- LCD display pipeline
+- Power and backlight
+- GPIO pin multiplexing
+- SPI-NAND
+- UART, SD, and USB
+- Video engine
+- Default peripheral states
+
+</td>
+<td width="50%" valign="top">
+
+### `devicetree.dts`
+
+The final base device-tree entry point for the current physical board.
+
+It extends `epass.dtsi` with:
+
+- Power-off GPIO
+- ST7701 initialization pins
+- LRADC button parameters
+
+</td>
+</tr>
+</table>
+
+Generated base device tree:
 
 ```text
 output/images/dt/base/devicetree.dtb
 ```
 
+---
+
 ## Composition
 
-The final device tree is assembled in the following order:
+```mermaid
+flowchart TB
+    A["Linux suniv-f1c100s.dtsi"]
+    B["base/epass.dtsi"]
+    C["base/devicetree.dts"]
+    D["screen / interface / ext overlays"]
+    E["U-Boot applies overlays"]
+    F["Boot Linux"]
 
-```text
-Linux suniv-f1c100s.dtsi
-        ↓
-base/epass.dtsi
-        ↓
-base/devicetree.dts
-        ↓
-screen, interface, and ext overlays
-        ↓
-U-Boot applies the overlays and boots Linux
+    A --> B --> C --> D --> E --> F
 ```
 
-`suniv-f1c100s.dtsi` provides the internal controller definitions shared by the F1C100S and F1C200S SoCs.
+`suniv-f1c100s.dtsi` provides the definitions for the controllers integrated into the F1C100S/F1C200S SoC.
+
+---
 
 ## `epass.dtsi`
 
@@ -46,71 +95,119 @@ compatible = "cra,electric-pass",
              "allwinner,suniv-f1c100s";
 ```
 
-`model` is the human-readable device name. The entries in `compatible` are ordered from the board-specific identifier to the most general SoC fallback.
+| Property | Purpose |
+| :--- | :--- |
+| `model` | Human-readable device model |
+| `compatible` | Allows the kernel to match the hardware from the most specific identifier to the most general one |
+
+---
 
 ### Boot Arguments
 
-`chosen/bootargs` is a placeholder only. The actual kernel command line is supplied by U-Boot and includes the serial console, UBI/UBIFS root filesystem, and NAND partition parameters.
+`chosen/bootargs` contains only a placeholder value.
+
+The actual kernel command line is supplied by U-Boot and includes:
+
+- Serial console
+- UBI / UBIFS root filesystem
+- NAND partition parameters
+
+---
 
 ### Display System
 
-The base display pipeline is:
-
-```text
-DE/FE/BE → TCON0 → RGB565 → LCD panel
+```mermaid
+flowchart LR
+    A["DE / FE / BE"] --> B["TCON0"]
+    B --> C["RGB565"]
+    C --> D["LCD panel"]
 ```
 
-The panel uses `lattland,mostima` to match the custom `panel-simple` kernel patch included with the project. The low-level display timing is 384×640 at 60 Hz, while the visible application interface should be designed for an area of approximately 360×640.
+The panel is matched by `cra,epass-panel` through the project's custom `panel-simple` kernel patch.
 
-`st7701initseq` is disabled in the base device tree. The screen overlay selected at boot enables it and supplies the initialization sequence for the BOE, HSD, or Laowu panel.
+| Item | Current configuration |
+| :--- | :--- |
+| Native timing | 384×640 |
+| Refresh rate | 60 Hz |
+| Application-visible area | Approximately 360×640 |
+| Panel driver match | `cra,epass-panel` |
 
-### Power Supplies and Backlight
+`st7701initseq` is disabled by default in the base device tree. At boot, the selected screen overlay enables it and supplies the initialization sequence for a BOE, HSD, or Laowu panel.
 
-- `vcc3v3`: fixed 3.3 V supply used by the SD interface and other peripherals.
-- `lradc_vref`: 3.0 V reference supply for the LRADC.
-- `pwm-backlight`: controls the display backlight through PWM0.
-- PWM period: 10000 ns, or approximately 100 kHz.
-- Default brightness index: 6, corresponding to a brightness value of 128.
+---
+
+### Power and Backlight
+
+| Item | Configuration |
+| :--- | :--- |
+| `vcc3v3` | Fixed 3.3 V supply for the SD interface and other peripherals |
+| `lradc_vref` | 3.0 V LRADC reference voltage |
+| Backlight | `pwm-backlight` |
+| PWM controller | PWM0 |
+| PWM period | `10000 ns` |
+| PWM frequency | Approximately 100 kHz |
+| Default brightness index | `6` |
+| Default brightness value | `128` |
+
+---
 
 ### GPIO Pin Multiplexing
 
-This file defines the following reusable pin groups:
+| Pin group | Purpose |
+| :--- | :--- |
+| `spi1_pins` | PE7, PE8, PE9, and PE10 |
+| `rtp_pins_0` | PA0 |
+| `rtp_pins_01` | PA0 and PA1 |
+| `lcd_rgb565_no_de_pins` | LCD RGB565 data, clock, and synchronization signals |
+| `i2s_pins_pe` | I²S pin layout on port E |
+| `i2s_pins_pa` | I²S pin layout on port A |
 
-- `spi1_pins`: PE7, PE8, PE9, and PE10.
-- `rtp_pins_0`: PA0.
-- `rtp_pins_01`: PA0 and PA1.
-- `lcd_rgb565_no_de_pins`: LCD RGB565 data, clock, and synchronization signals.
-- `i2s_pins_pe` and `i2s_pins_pa`: two alternative I²S pin layouts.
+> [!WARNING]
+> GPIO pin-multiplexing settings must match the actual PCB routing.
 
-These assignments must remain consistent with the PCB routing.
+---
 
-### SPI-NAND Partition Layout
+### SPI-NAND Partitions
 
-The onboard SPI-NAND is arranged as a 128 MiB device:
+The onboard SPI-NAND uses a **128 MiB** layout:
 
-| Partition | Start Address | Size | Purpose |
-| --- | ---: | ---: | --- |
-| `u-boot` | `0x000000` | 1 MiB | SPL, U-Boot, and the boot environment. |
-| `boot` | `0x100000` | 6 MiB | Linux kernel, base device tree, and overlays. |
-| `rootfs` | `0x700000` | 121 MiB | UBIFS root filesystem, applications, and resources. |
+| Partition | Start address | Size | Purpose |
+| :--- | ---: | ---: | :--- |
+| `u-boot` | `0x000000` | 1 MiB | SPL, U-Boot, and the boot environment |
+| `boot` | `0x100000` | 6 MiB | Linux kernel, base device tree, and overlays |
+| `rootfs` | `0x700000` | 121 MiB | UBIFS root filesystem, applications, and resources |
 
-When changing the partition layout, update and verify the device tree, U-Boot command line, image-generation scripts, and flashing addresses together.
+```mermaid
+flowchart LR
+    A["0x000000<br/>u-boot<br/>1 MiB"]
+    B["0x100000<br/>boot<br/>6 MiB"]
+    C["0x700000<br/>rootfs<br/>121 MiB"]
+
+    A --> B --> C
+```
+
+> [!CAUTION]
+> When modifying the partitions, also update and verify the device tree, U-Boot command line, image-generation scripts, and flashing addresses.
+
+---
 
 ### Default Peripheral States
 
-| Peripheral | Default State | Description |
-| --- | --- | --- |
-| PWM0 | Enabled | Controls the display backlight. |
-| SPI0 | Enabled | Connects to the onboard SPI-NAND. |
-| SPI1 | Disabled | Enabled by an interface overlay when required. |
-| UART0 | Enabled | System debug console. |
-| UART1/UART2 | Disabled | Enabled by interface overlays when required. |
-| MMC0 | Enabled | 4-bit SD/MMC interface at 3.3 V. |
-| USB OTG/PHY | Enabled | Supports USB device mode, RNDIS, and optional host mode. |
-| Cedar/ION/DE/FE/BE | Enabled | Provides video decoding, display memory management, and display-engine support. |
-| TVE0 | Disabled | Analog TV output is not used. |
-| LRADC | Enabled | Reads the resistor-ladder keys. |
-| I²C0 | Disabled | Enabled by an interface or extension overlay when required. |
+| Peripheral | Default state | Description |
+| :--- | :---: | :--- |
+| PWM0 | Enabled | Controls the screen backlight |
+| SPI0 | Enabled | Connected to the onboard SPI-NAND |
+| SPI1 | Disabled | Enabled by an interface overlay when required |
+| UART0 | Enabled | System debug UART |
+| UART1 / UART2 | Disabled | Enabled by an interface overlay when required |
+| MMC0 | Enabled | 4-bit SD/MMC at 3.3 V |
+| USB OTG / PHY | Enabled | USB Device, RNDIS, and optional Host support |
+| Cedar / ION / DE / FE / BE | Enabled | Video decoding, display memory, and display engine |
+| TVE0 | Disabled | Analog TV output is not used |
+| LRADC | Enabled | Reads resistor-ladder buttons |
+| I²C0 | Disabled | Enabled by an interface or ext overlay when required |
+
+---
 
 ## `devicetree.dts`
 
@@ -121,26 +218,36 @@ gpios = <&pio 4 2 GPIO_ACTIVE_HIGH>;
 timeout-ms = <3000>;
 ```
 
-Driving PE2 high triggers the hardware power-off circuit. The driver waits for 3000 ms after asserting the signal.
+| Item | Current configuration |
+| :--- | :--- |
+| GPIO | PE2 |
+| Active level | High |
+| Triggered action | Hardware power cut |
+| Timeout | 3000 ms |
 
-An incorrect pin assignment can leave the device powered even after Linux has completed its shutdown sequence.
+> [!WARNING]
+> If the power-off GPIO is configured incorrectly, Linux may complete its shutdown sequence while the device remains powered.
+
+---
 
 ### ST7701 Initialization Interface
 
 | Signal | GPIO |
-| --- | --- |
+| :--- | :--- |
 | SDA | PE4 |
 | SCL | PD19 |
 | CS | PE11 |
 
-These pins are used only to send initialization commands to the ST7701. LCD pixel data is transferred separately over the RGB565 bus.
+These pins are used only to send initialization commands to the ST7701. LCD pixel data is transmitted over the RGB565 bus.
 
-### LRADC Keys
+---
 
-All five keys share LRADC channel 0. A resistor ladder produces a different target voltage for each key:
+### LRADC Buttons
 
-| Linux Key Code | Target Voltage |
-| --- | ---: |
+Five buttons share LRADC channel 0 and use different resistor values to produce distinct target voltages.
+
+| Linux key code | Target voltage |
+| :--- | ---: |
 | `KEY_0` | 0 V |
 | `KEY_1` | 1.396826 V |
 | `KEY_2` | 1.111111 V |
@@ -149,66 +256,68 @@ All five keys share LRADC channel 0. A resistor ladder produces a different targ
 
 The `voltage` property is expressed in microvolts.
 
-Do not change these values without recalibrating the resistor ladder. Incorrect values can cause missed key presses, incorrect key detection, or unstable behavior near a voltage threshold.
+> [!CAUTION]
+> Do not change the LRADC voltage parameters without verifying the resistor network. Incorrect values may cause missed presses, incorrect key events, or instability near voltage thresholds.
 
-## Overlays
+---
 
-The base device tree defines the hardware framework. The following features are still selected through overlays:
+## Overlay
 
-- `screen/`: initialization for BOE, HSD, and Laowu panels.
-- `interface/`: ADC, I²C, I²S, SPI, UART, USB, and other interfaces.
-- `ext/`: extension devices such as CardKB, ES8311, and LSM6DS3.
+The base device tree defines the overall system structure, while overlays select optional functions.
 
-## Guidance for Further Development
+<table>
+<tr>
+<td width="33%" valign="top">
 
-Low-risk changes:
+### `screen/`
 
-- Backlight brightness table and default brightness.
-- Key `label` values.
+Panel initialization:
 
-Changes that require corresponding updates in the application or other configuration files:
+- BOE
+- HSD
+- Laowu
 
-- Linux key codes.
-- UART, SPI, I²C, and I²S enablement.
-- USB operating mode.
-- `screen`, `interface`, and `ext` overlays.
+</td>
+<td width="33%" valign="top">
 
-High-risk settings:
+### `interface/`
 
-- Power-off GPIO.
-- ST7701 initialization GPIOs.
-- LCD RGB pins and panel `compatible` string.
-- LRADC key voltages.
-- SPI-NAND partition layout.
-- Voltage and clock parameters.
+Interfaces:
 
-`lattland,mostima` and `lattland,st7701-initseq` are kernel driver match strings, not text displayed by the user interface. Renaming either one requires the corresponding Linux kernel patch to be updated at the same time.
+- ADC
+- I²C
+- I²S
+- SPI
+- UART
+- USB
 
-## Comments and Formatting
+</td>
+<td width="33%" valign="top">
 
-Use C-style comments:
+### `ext/`
 
-```dts
-/* Brief explanation */
+Expansion devices:
 
-/*
- * Longer explanation.
- * Document the hardware rationale, units, and modification risks.
- */
-```
+- CardKB
+- ES8311
+- LSM6DS3
 
-Keep all files encoded as UTF-8.
+</td>
+</tr>
+</table>
 
-## Building and Validation
+---
 
-Run the following commands from the Buildroot root directory in WSL:
+## Build and Validation
+
+### 1. Run a Complete Build
 
 ```sh
 make cra_epass_defconfig
 make -j$(nproc)
 ```
 
-Verify the model stored in the generated device tree:
+### 2. Verify the Device Model
 
 ```sh
 output/host/bin/fdtget \
@@ -222,10 +331,21 @@ Expected output:
 CRA Electric Pass
 ```
 
-Inspect the FIT image:
+### 3. Inspect the FIT Image
 
 ```sh
 output/host/bin/dumpimage -l output/images/boot.itb
 ```
 
-The base device tree should appear as `fdt-base`. Building and validating the image does not write anything to a physical device.
+The base device tree should appear as `fdt-base`.
+
+> [!NOTE]
+> Building and validation only generate and inspect software artifacts; they do not write anything to a physical device automatically.
+
+---
+
+<div align="center">
+
+<sub><b>CRA Electric Pass</b> · Linux base device tree</sub>
+
+</div>
