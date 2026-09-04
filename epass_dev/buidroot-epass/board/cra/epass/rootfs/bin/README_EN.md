@@ -1,116 +1,446 @@
-# Device Utility Programs
+<div align="center">
 
-Files in this directory are installed into, or override files under:
+# CRA Electric Pass Device Utilities
+
+<sub>Read this in other languages: [English](README_EN.md), [中文](README.md).</sub>
+
+</div>
+
+> [!NOTE]
+> The files in this directory are overlaid or installed into `/bin/` on the target device. They include POSIX / BusyBox shell scripts and ARM utilities that draw directly to the device framebuffer.
+
+<p align="center">
+  <a href="#directory-role">Directory Role</a> ·
+  <a href="#boot-and-login">Boot and Login</a> ·
+  <a href="#backlight-control">Backlight</a> ·
+  <a href="#storage-maintenance">Storage</a> ·
+  <a href="#memory-check">Memory</a> ·
+  <a href="#usb-mode-control">USB</a> ·
+  <a href="#shutdown-message-programs">Shutdown Messages</a>
+</p>
+
+---
+
+## Directory Role
+
+Target path on the device:
 
 ```text
 /bin/
 ```
 
-on the target device. The directory contains a mixture of POSIX/BusyBox shell scripts and ARM binaries that draw directly to the device framebuffer.
+The contents of this directory fall into two categories:
 
-## Startup and Login
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### Shell Scripts
+
+Based on:
+
+```text
+POSIX / BusyBox Shell
+```
+
+Primarily responsible for:
+
+- Automatic login
+- Backlight adjustment
+- SD-card formatting
+- Boot-partition mounting
+- Memory checks
+- USB Gadget mode switching
+
+</td>
+<td width="50%" valign="top">
+
+### ARM Utilities
+
+Draw directly to the device framebuffer.
+
+The current utilities are:
+
+```text
+shutdown_message
+shutdown_message_2
+shutdown_message_3
+```
+
+</td>
+</tr>
+</table>
+
+---
+
+## Boot and Login
 
 ### `autologin`
 
-The script ultimately executes:
+Ultimately executes:
 
 ```sh
 exec /bin/login -f root
 ```
 
-`/etc/inittab` passes it to `getty` on `tty0`, so the local main console does not ask for the root password. After login, the root shell reads `/root/.profile`, which continues the main-program startup sequence.
+Invocation flow:
+
+```mermaid
+flowchart LR
+    A["/etc/inittab"] --> B["getty @ tty0"]
+    B --> C["/bin/autologin"]
+    C --> D["login -f root"]
+    D --> E["/root/.profile"]
+    E --> F["Main-application startup flow"]
+```
+
+The local primary console does not prompt for the root password.
+
+> [!WARNING]
+> `login -f root` implements passwordless local automatic login. This design relies on the physical-access boundary of the device and is not suitable as the default security policy for a general-purpose Linux host.
+
+---
 
 ## Backlight Control
 
-### `brightness_down` and `brightness_up`
+### `brightness_down`
 
-These two scripts read and write:
+### `brightness_up`
+
+Both scripts read and write:
 
 ```text
 /sys/class/backlight/backlight/brightness
 ```
 
-They use `bc` to subtract or add 1, then write the result back to sysfs through `tee`. They do not read `max_brightness` or enforce lower and upper bounds, so callers must avoid out-of-range values.
+Processing flow:
 
-## Storage Maintenance
+```mermaid
+flowchart LR
+    A["Read brightness"] --> B["bc ± 1"]
+    B --> C["Write back to sysfs with tee"]
+```
 
-### `format_sd`
+The current scripts:
 
-This script always treats:
+- Do not read `max_brightness`
+- Do not enforce a minimum value
+- Do not enforce a maximum value
+
+> [!CAUTION]
+> Callers must prevent out-of-range values. If the scripts are refactored later, read `max_brightness` first and clamp the result to the valid range.
+
+---
+
+# Storage Maintenance
+
+## `format_sd`
+
+The script assumes that:
 
 ```text
 /dev/mmcblk0
 ```
 
-as the SD card. Its procedure is:
+is the SD card.
 
-1. Check whether the block device exists.
-2. Ask the user to enter `1` for confirmation.
-3. Unmount the old partition and `/sd`.
-4. Use `fdisk` to clear the partition table.
-5. Create one FAT32 LBA primary partition spanning the available space.
-6. Format `/dev/mmcblk0p1` with `mkdosfs -F 32`.
-7. Mount it at `/sd`, then create `/tmp/sd_mounted` and `/sd/assets/`.
-8. Restart USB MTP mode if MTP is currently running.
+### Execution Flow
 
-This is a destructive operation that erases all data on the target card. It is intended only for a physical Electric Pass whose device-node mapping has already been verified. Do not run it on a development computer or an unknown Linux device.
+```mermaid
+flowchart TB
+    A["Check /dev/mmcblk0"]
+    B["User enters 1 to confirm"]
+    C["Unmount existing partitions and /sd"]
+    D["Clear partition table with fdisk"]
+    E["Create FAT32 LBA primary partition"]
+    F["mkdosfs -F 32"]
+    G["Mount at /sd"]
+    H["Create /tmp/sd_mounted"]
+    I["Create /sd/assets/"]
+    J{"Is MTP running?"}
+    K["Restart USB MTP"]
 
-The script currently creates `/sd/assets/`, but the message written to `/sd/README.txt` refers to `/assets/`. Those paths have different meanings.
+    A --> B --> C --> D --> E --> F --> G --> H --> I --> J
+    J -- Yes --> K
+```
 
-The mount-failure branch currently uses a top-level `return 1`. Because `format_sd` normally runs as a standalone script, `exit 1` would be more robust. This issue is documented here but has not been changed in the current revision.
+Actual formatting target:
 
-### `mount_boot`
+```text
+/dev/mmcblk0p1
+```
 
-The script executes:
+Filesystem:
+
+```text
+FAT32
+```
+
+### Known Issues
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### Inconsistent README Path
+
+The script actually creates:
+
+```text
+/sd/assets/
+```
+
+but the message in `/sd/README.txt` refers to:
+
+```text
+/assets/
+```
+
+These paths have different meanings.
+
+</td>
+<td width="50%" valign="top">
+
+### Top-Level `return 1`
+
+The mount-failure branch currently uses:
+
+```sh
+return 1
+```
+
+A standalone script should instead use:
+
+```sh
+exit 1
+```
+
+This issue is documented here but has not been modified.
+
+</td>
+</tr>
+</table>
+
+> [!CAUTION]
+> `format_sd` deletes all data on the target card. Run it only on a CRA Electric Pass after confirming that `/dev/mmcblk0` is the physical SD card.
+
+---
+
+## `mount_boot`
+
+Executes:
 
 ```sh
 ubiattach -m 1
 mount -t ubifs ubi1:boot /boot
 ```
 
-It attaches MTD partition 1 as a UBI device, then mounts the UBIFS volume named `boot`. The MTD number, UBI number, and volume name are all tied to this project's NAND partition layout.
+Flow:
+
+```mermaid
+flowchart LR
+    A["MTD 1"] --> B["ubiattach"]
+    B --> C["UBI device"]
+    C --> D["ubi1:boot"]
+    D --> E["/boot"]
+```
+
+The script depends on the project's fixed:
+
+- MTD index
+- UBI index
+- UBIFS volume name
+- NAND partition layout
+
+> [!IMPORTANT]
+> After changing the NAND partitions or UBI layout, verify and update `mount_boot` accordingly.
+
+---
 
 ## Memory Check
 
 ### `memcheck`
 
-This script reads `MemTotal` from `/proc/meminfo`. If the value is below `46080 KiB`, it warns that the device may contain an F1C100s with only 32 MiB of RAM presented as an F1C200s, then waits for 10 seconds.
+The script reads:
 
-This is an empirical threshold, not a hardware-level chip identification. Normal kernel reservations also affect the amount of visible memory.
+```text
+/proc/meminfo
+```
 
-## USB Mode Control
+and uses:
 
-### `usbctl`
+```text
+MemTotal
+```
 
-`usbctl` assembles a USB Gadget through Linux ConfigFS and supports:
+Decision flow:
+
+```mermaid
+flowchart LR
+    A["Read MemTotal"] --> B{"< 46080 KiB?"}
+    B -- No --> C["Continue booting"]
+    B -- Yes --> D["Display memory warning"]
+    D --> E["Wait 10 seconds"]
+```
+
+When the value is below:
+
+```text
+46080 KiB
+```
+
+the script warns that the device may use an F1C100s with only 32 MiB of RAM instead of the expected 64 MiB F1C200s.
+
+> [!NOTE]
+> This is an empirical threshold, not a hardware-level chip-identification method. Kernel-reserved memory and other factors also affect the amount of memory visible to Linux.
+
+---
+
+# USB Mode Control
+
+## `usbctl`
+
+`usbctl` dynamically assembles a USB Gadget through Linux ConfigFS.
+
+### Supported Commands
 
 | Command | Function |
-| --- | --- |
-| `usbctl mtp` | Start uMTP Responder file transfer |
-| `usbctl serial` | Create a USB ACM serial interface and start `getty` |
-| `usbctl rndis` | Create the RNDIS network interface and run `/sbin/ifup -a` |
-| `usbctl epass` / `usbctl responder` | Create the custom FunctionFS interface and start `usb_responder` |
-| `usbctl none` / `usbctl stop` | Stop related daemons and remove the Gadget configuration |
-| `usbctl start` | Compatibility entry point equivalent to starting MTP |
+| :--- | :--- |
+| `usbctl mtp` | Starts uMTP Responder file transfer |
+| `usbctl serial` | Creates a USB ACM serial interface and starts `getty` |
+| `usbctl rndis` | Creates an RNDIS network interface and runs `/sbin/ifup -a` |
+| `usbctl epass` | Creates the custom FunctionFS interface and starts `usb_responder` |
+| `usbctl responder` | Same as `epass` |
+| `usbctl none` | Stops the daemons and removes the Gadget |
+| `usbctl stop` | Same as `none` |
+| `usbctl start` | Compatibility entry point equivalent to MTP |
 
-The displayed USB string is `Electric Pass`. In MTP mode, the script selects `umtprd_sd.conf` or `umtprd_nosd.conf` according to the presence of `/tmp/sd_mounted`, then copies it to the runtime configuration path `/etc/umtprd/umtprd.conf`.
+### Gadget Mode Relationships
 
-## Random Shutdown Message Programs
+```mermaid
+flowchart TB
+    A["usbctl"]
+    B["mtp"]
+    C["serial"]
+    D["rndis"]
+    E["epass / responder"]
+    F["none / stop"]
 
-`shutdown_message*` consists of three image variants of the same ARM framebuffer utility. Each binary embeds a 360×129 RGB888 bitmap:
+    A --> B
+    A --> C
+    A --> D
+    A --> E
+    A --> F
+```
 
-| Program | Current Text |
-| --- | --- |
-| `shutdown_message` | 要走了吗，不再看看 (“Leaving already? Won't you stay a little longer?”) |
-| `shutdown_message_2` | 再见，祝愿未来 (“Goodbye, and best wishes for the future.”) |
-| `shutdown_message_3` | 别忘记这里 (“Don't forget this place.”) |
+USB product string:
 
-### Call Relationship
+```text
+Electric Pass
+```
 
-`randomly_show_shutdown_message` in `/root/.profile` enters the message branch with a 20% probability, then selects one of these three absolute paths with equal probability:
+---
+
+### MTP Configuration Selection
+
+MTP mode checks:
+
+```text
+/tmp/sd_mounted
+```
+
+and then selects:
+
+```mermaid
+flowchart LR
+    A{"/tmp/sd_mounted exists?"}
+    B["umtprd_sd.conf"]
+    C["umtprd_nosd.conf"]
+    D["/etc/umtprd/umtprd.conf"]
+    E["uMTP Responder"]
+
+    A -- Yes --> B --> D --> E
+    A -- No --> C --> D
+```
+
+This switches the storage exposed through MTP according to whether the SD card is mounted.
+
+---
+
+# Shutdown Message Programs
+
+`shutdown_message*` contains three image variants of the same ARM framebuffer utility.
+
+Each program embeds a:
+
+```text
+360 × 129
+RGB888
+```
+
+bitmap.
+
+| Program | Current text |
+| :--- | :--- |
+| `shutdown_message` | 要走了吗，不再看看 |
+| `shutdown_message_2` | 再见，祝愿未来 |
+| `shutdown_message_3` | 别忘记这里 |
+
+### Invocation
+
+The following function in `/root/.profile`:
+
+```text
+randomly_show_shutdown_message
+```
+
+performs the random selection.
+
+```mermaid
+flowchart TB
+    A["randomly_show_shutdown_message"]
+    B{"20% chance of entering the message branch"}
+    C["shutdown_message"]
+    D["shutdown_message_2"]
+    E["shutdown_message_3"]
+
+    A --> B
+    B -- Yes --> C
+    B -- Yes --> D
+    B -- Yes --> E
+```
+
+The three absolute paths are:
 
 ```text
 /bin/shutdown_message
 /bin/shutdown_message_2
 /bin/shutdown_message_3
 ```
+
+After the message branch is selected, each of the three programs has an equal probability of being executed.
+
+---
+
+## Utility Risk Overview
+
+| Utility | Risk level | Main risk |
+| :--- | :---: | :--- |
+| `autologin` | Medium | Passwordless local root login |
+| `brightness_*` | Low | No brightness-bound checking |
+| `format_sd` | **High** | Erases `/dev/mmcblk0` |
+| `mount_boot` | Medium | Coupled to a fixed MTD / UBI layout |
+| `memcheck` | Low | Empirical threshold may produce false positives |
+| `usbctl` | Medium | Dynamically changes USB Gadget state |
+| `shutdown_message*` | Low | Framebuffer helper display |
+
+> [!CAUTION]
+> `format_sd` is the most destructive script in this directory. Before porting, debugging, or extending it, confirm the block-device mapping.
+
+---
+
+<div align="center">
+
+<sub><b>CRA Electric Pass</b> · Device utility programs installed under <code>/bin/</code></sub>
+
+</div>
