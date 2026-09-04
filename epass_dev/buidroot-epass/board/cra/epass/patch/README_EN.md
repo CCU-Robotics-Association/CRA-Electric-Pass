@@ -1,12 +1,74 @@
-# CRA Electric Pass Board-Level Patches
+<div align="center">
 
-Read this in other languages: [English](README_EN.md), [中文](README.md).
+# CRA Electric Pass Board Patches
 
-This directory contains the board-level source patches applied to Linux 5.4.99 and U-Boot 2020.07 while Buildroot builds CRA Electric Pass.
+<sub>Read this in other languages: [English](README_EN.md), [中文](README.md).</sub>
 
-These patches provide F1C100S/F1C200S support that is missing from the selected upstream releases and implement the display, panel initialization, ADC, USB, SPI-NAND, audio, keyboard, GPIO, and DFU functions required by the current hardware.
+</div>
+
+> [!NOTE]
+> This directory contains the board-specific source patches that CRA Electric Pass applies to **Linux 5.4.99** and **U-Boot** during the Buildroot build.
+
+<p align="center">
+  <a href="#directory-structure">Directory Structure</a> ·
+  <a href="#patch-architecture">Patch Architecture</a> ·
+  <a href="#application-order">Application Order</a> ·
+  <a href="#linux-patches">Linux</a> ·
+  <a href="#u-boot-patches">U-Boot</a> ·
+  <a href="#cross-directory-coupling">Coupling</a> ·
+  <a href="#correct-rebuild-procedure">Rebuild Procedure</a> ·
+  <a href="#windows-and-line-endings">Windows / LF</a> ·
+  <a href="#validation-status">Validation Status</a>
+</p>
+
+---
 
 ## Directory Structure
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### `linux/`
+
+**Target: Linux 5.4.99**
+
+Contains **13 patches**
+
+Covers:
+
+- Display and panel initialization
+- ADC
+- USB
+- Private DRM interface
+- CardKB
+- I²S / ES8311
+- GPIO UAPI
+
+[Linux patch details](linux/README_EN.md)
+
+</td>
+<td width="50%" valign="top">
+
+### `uboot/`
+
+**Target: U-Boot**
+
+Contains **5 patches**
+
+Covers:
+
+- UART0
+- USB DFU
+- SPI-NAND
+- SUNIV SPI clocks
+- NAND post-write verification
+
+[U-Boot patch details](uboot/README_EN.md)
+
+</td>
+</tr>
+</table>
 
 ```text
 patch/
@@ -36,183 +98,287 @@ patch/
 ```
 
 | Subdirectory | Target source | Patch count | Details |
-| --- | --- | ---: | --- |
-| `linux/` | Linux 5.4.99 | 13 | [Linux patch documentation](linux/README_EN.md) |
-| `uboot/` | U-Boot 2020.07 | 5 | [U-Boot patch documentation](uboot/README_EN.md) |
+| :--- | :--- | ---: | :--- |
+| `linux/` | Linux 5.4.99 | 13 | [Linux patch details](linux/README_EN.md) |
+| `uboot/` | U-Boot | 5 | [U-Boot patch details](uboot/README_EN.md) |
 
-## Buildroot Configuration Entry Point
+---
 
-The patch paths are selected by:
+## Patch Architecture
+
+Both Linux and U-Boot use a two-tier patch structure in CRA Electric Pass.
+
+```mermaid
+flowchart TB
+    A["Official upstream source"]
+    B["Shared SUNIV / F1C100S patches"]
+    C["CRA Electric Pass board patches"]
+    D["Board defconfig"]
+    E["Build artifacts"]
+
+    A --> B --> C --> D --> E
+```
+
+Buildroot configuration entry point:
 
 ```text
 board/cra/epass/cra_epass_defconfig
 ```
 
-through the following settings:
+### Linux
 
 ```make
 BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="5.4.99"
 BR2_LINUX_KERNEL_PATCH="board/allwinner/suniv-f1c100s/patch/linux board/cra/epass/patch/linux"
 BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE="board/cra/epass/linux.defconfig"
+```
 
+### U-Boot
+
+```make
 BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE="2020.07"
 BR2_TARGET_UBOOT_PATCH="board/allwinner/suniv-f1c100s/patch/u-boot board/cra/epass/patch/uboot"
 BR2_TARGET_UBOOT_CUSTOM_CONFIG_FILE="board/cra/epass/uboot.defconfig"
 ```
 
-Both Linux and U-Boot use a two-level patch structure:
+> [!IMPORTANT]
+> The shared patches provide the SoC-level foundation, while the patches in this directory implement CRA Electric Pass board features and legacy adaptations. The two tiers have contextual dependencies, so the CRA patches cannot be applied directly to the original source without the shared SUNIV patches.
 
-```text
-Official upstream source
-      │
-      ▼
-Shared SUNIV/F1C100S patches
-      │
-      ▼
-CRA Electric Pass board-level patches
-      │
-      ▼
-Board defconfig
-      │
-      ▼
-Build outputs
-```
+---
 
-The shared patches provide the SoC-level foundation. The patches in this directory add the board-specific functionality required by CRA Electric Pass and carry forward adaptations inherited from the original project. The two levels have contextual dependencies, so the CRA patches cannot be applied directly to source that has not first received the shared patch series.
+## Application Order
 
-## Patch Application Order
-
-Buildroot applies patches in lexical filename order:
+Buildroot applies patches sequentially in lexical file-name order:
 
 ```text
 0000
 0001
 0002
-……
+...
 0012
 ```
 
-Within one subdirectory, a later patch may modify a file created or changed by an earlier patch. For example:
+The numbering determines both ordering and dependencies between patches.
 
-```text
-Linux 0006
-  └─ Creates drivers/staging/cra/ and the base Kconfig
+For example:
 
-Linux 0009
-  └─ Adds the CardKB driver and Kconfig option to the same directory
+```mermaid
+flowchart LR
+    A["Linux 0006<br/>Creates drivers/staging/cra/<br/>and base Kconfig"]
+    B["Linux 0009<br/>Adds the CardKB driver<br/>and Kconfig option"]
+
+    A --> B
 ```
 
-Therefore:
+> [!WARNING]
+> Renaming, moving, or inserting a patch may change the application order. After modifying an earlier patch, verify that every later patch still matches the resulting source context.
 
-- The numbers define both ordering and dependencies between patches.
-- Renaming or moving a patch may change its application order.
-- When changing context introduced by an earlier patch, verify that every later patch still matches.
-- Successfully parsing every patch does not prove that the complete series can be applied in sequence.
+### Patch Validation Is Not a Single Step
 
-## Linux Patch Responsibilities
+```mermaid
+flowchart LR
+    A["Diff parses"] --> B["Complete patch set applies"]
+    B --> C["Kconfig recognizes options"]
+    C --> D["Code compiles"]
+    D --> E["Image boots"]
+    E --> F["Physical hardware works"]
+```
+
+Each stage requires independent validation.
+
+---
+
+# Linux Patches
 
 The Linux patches primarily cover:
 
-| Function | Related patches |
-| --- | --- |
-| GPADC registers, sampling, and filtering | `0000`, `0005` |
-| Kernel framebuffer boot logo | `0001` |
-| 384×640 panel timing | `0002` |
-| DEFE/DEBE, scaling, and YUV display | `0003` |
-| Red/blue channel swap | `0004` |
+| Feature | Related patches |
+| :--- | :--- |
+| GPADC registers / sampling / filtering | `0000`, `0005` |
+| Framebuffer boot logo | `0001` |
+| 384×640 panel timings | `0002` |
+| DEFE / DEBE, scaling, and YUV | `0003` |
+| Red/blue channel swapping | `0004` |
 | ST7701 GPIO initialization | `0006` |
-| Private DRM interface used by `drm_app_neo` | `0007` |
-| Linux MUSB Full-Speed/High-Speed selection | `0008` |
+| Private DRM interface for `drm_app_neo` | `0007` |
+| MUSB Full-Speed / High-Speed selection | `0008` |
 | M5Stack CardKB | `0009` |
-| I²S and audio codecs such as ES8311 | `0010` |
-| Framebuffer text-console width workaround | `0011` |
-| GPIO pull-up, pull-down, and runtime configuration | `0012` |
+| I²S / ES-series codecs | `0010` |
+| Framebuffer console width workaround | `0011` |
+| GPIO bias / runtime configuration | `0012` |
 
-Higher-risk areas in the Linux patch series include:
+### Feature Groups
 
-- Display code in `0003` that is tied to the current resolution and vendor BSP tables.
-- The private interface in `0007`, which directly operates DRM registers and userspace memory mappings.
-- The unresolved initialization defect in the MUSB `power` local variable in `0008`.
-- The global modification to the generic framebuffer console in `0011`.
-- The backport affecting the Linux GPIO core and UAPI in `0012`.
+<table>
+<tr>
+<td width="33%" valign="top">
 
-See the following document for implementation details, dependencies, and known issues:
+### Display
+
+`0001` `0002` `0003`  
+`0004` `0006` `0007` `0011`
+
+LCD, ST7701, DEFE/DEBE, DRM, and fbcon.
+
+</td>
+<td width="33%" valign="top">
+
+### Input / Audio / ADC
+
+`0000` `0005`  
+`0009` `0010`
+
+GPADC, CardKB, I²S, and ES8311.
+
+</td>
+<td width="33%" valign="top">
+
+### USB / GPIO
+
+`0008` `0012`
+
+USB speed control and the GPIO UAPI backport.
+
+</td>
+</tr>
+</table>
+
+### High-Risk Maintenance Areas
+
+| Patch | Risk |
+| :--- | :--- |
+| `0003` | Closely tied to the current resolution, YUV path, and vendor BSP parameters |
+| `0007` | Private DRM UAPI, direct register access, and user-memory mapping |
+| `0008` | Known initialization issue in the MUSB local variable `power` |
+| `0011` | Modifies the generic framebuffer console |
+| `0012` | Backports GPIO Core / UAPI functionality |
+
+> [!CAUTION]
+> The high-risk parts of the Linux patch set cannot be considered safe at runtime merely because the patches apply successfully.
+
+Detailed implementations, dependencies, and known issues:
 
 ```text
 linux/README_EN.md
 ```
 
-## U-Boot Patch Responsibilities
+---
 
-The U-Boot patches primarily cover:
+# U-Boot Patches
 
-| Function | Related patch |
-| --- | --- |
-| UART0 TX/RX pull-ups | `0001` |
-| Force U-Boot MUSB Gadget to Full-Speed | `0002` |
-| Identify Macronix MX35LF1G SPI-NAND devices in SPL | `0003` |
-| SUNIV SPI parent-clock and divider calculation | `0004` |
-| DFU post-write verification, bad-block marking, and skipping | `0005` |
+| Feature | Related patch |
+| :--- | :--- |
+| UART0 TX / RX pull-ups | `0001` |
+| Force MUSB Gadget to Full-Speed | `0002` |
+| Detect Macronix SPI-NAND in SPL | `0003` |
+| SUNIV SPI parent clock / divider | `0004` |
+| DFU post-write verification and bad-block handling | `0005` |
 
-They participate in the following boot chain:
+### Position in the Boot Flow
 
-```text
-Device power-on
-   │
-   ▼
-SPL initializes DRAM, UART0, and SPI0
-   │
-   ▼
-Identify SPI-NAND and load main U-Boot
-   │
-   ▼
-Main U-Boot reads the environment and boot.itb
-   │
-   ├─ Boot Linux normally
-   │
-   └─ Enter USB DFU
-          └─ Write, read back, verify, and handle bad blocks
+```mermaid
+flowchart TB
+    A["Device powers on"]
+    B["SPL initializes DRAM / UART0 / SPI0"]
+    C["Detect SPI-NAND"]
+    D["Load main U-Boot"]
+    E["Main U-Boot reads environment / boot.itb"]
+    F{"Boot result"}
+    G["Linux"]
+    H["USB DFU"]
+    I["Write / read-back verification / bad-block handling"]
+
+    A --> B --> C --> D --> E --> F
+    F -- Normal --> G
+    F -- Failure or user request --> H --> I
 ```
 
-See the following document for implementation details, partition relationships, and NAND image post-processing:
+Specifically:
+
+- `0001`: stabilizes UART0 levels during early boot
+- `0003`: helps SPL detect Macronix SPI-NAND
+- `0004`: corrects the SUNIV SPI clock / divider
+- `0002`: forces U-Boot MUSB to Full-Speed
+- `0005`: reads data back after DFU writes and handles bad blocks
+
+Detailed implementation, NAND layout, and DFU behavior:
 
 ```text
 uboot/README_EN.md
 ```
 
-## Relationship to Other Directories
+---
 
-This directory cannot be maintained independently of the following files.
+## Cross-Directory Coupling
 
-### Kernel and U-Boot Configurations
+This directory cannot be maintained independently of the configurations, device trees, user space, and image scripts.
+
+```mermaid
+flowchart TB
+    A["Patches"]
+    B["Defconfig"]
+    C["Device Tree"]
+    D["User Space"]
+    E["Image Scripts"]
+    F["Final system"]
+
+    A --> F
+    B --> F
+    C --> F
+    D --> F
+    E --> F
+```
+
+---
+
+### Defconfig
 
 ```text
 board/cra/epass/linux.defconfig
 board/cra/epass/uboot.defconfig
 ```
 
-When a patch adds a new Kconfig feature, the corresponding defconfig must select it. Otherwise, the code may exist in the source tree without being compiled.
+> [!IMPORTANT]
+> A Kconfig feature added by a patch must be selected by the corresponding defconfig. The presence of code in the source tree does not mean that it will be included in the final kernel or U-Boot image.
 
-### Device Trees
+---
+
+### Device Tree
 
 ```text
 board/cra/epass/devicetree/linux/
 board/cra/epass/devicetree/uboot/
 ```
 
-The following values must remain consistent between the device trees and patches:
+The following identifiers must remain consistent with the driver implementations:
 
-- `cra,epass-panel`.
-- `cra,st7701-initseq`.
-- `cra,swap-b-r`.
-- `cra,usb-hs-enabled`.
-- The SPI0 and SPI-NAND nodes.
-- `spi-max-frequency`.
-- CardKB, ES8311, and other expansion-device nodes.
+```text
+cra,epass-panel
+cra,st7701-initseq
+cra,swap-b-r
+cra,usb-hs-enabled
+```
 
-### Main Application
+Also verify references to:
 
-Linux patch `0007-srgn-drm-atomic-ioctl.patch` and the following files:
+- SPI0
+- SPI-NAND
+- `spi-max-frequency`
+- CardKB
+- ES8311
+- Other expansion nodes
+
+---
+
+### Private DRM ABI
+
+Linux:
+
+```text
+0007-srgn-drm-atomic-ioctl.patch
+```
+
+and user space:
 
 ```text
 drm_app_neo/src/driver/srgn_drm.h
@@ -221,7 +387,17 @@ drm_app_neo/src/render/
 drm_app_neo/src/overlay/
 ```
 
-together define the private DRM ABI between the kernel and userspace. When changing an IOCTL number, structure, field width, or command meaning, update and rebuild both sides together.
+together define the kernel/user-space ABI.
+
+```mermaid
+flowchart LR
+    A["Kernel DRM UAPI"] <--> B["drm_app_neo"]
+```
+
+> [!CAUTION]
+> IOCTL numbers, structure layouts, field widths, and command semantics must remain identical on both sides. A unilateral change can break the ABI.
+
+---
 
 ### Image Scripts
 
@@ -231,13 +407,20 @@ board/cra/epass/scripts/mkdt.sh
 board/cra/epass/scripts/buildimage.sh
 ```
 
-The patches only modify source code. Device-tree compilation, NAND SPL layout conversion, and final image generation are separate build stages handled by these scripts.
+| Script | Responsibility |
+| :--- | :--- |
+| `mknanduboot.sh` | NAND SPL / U-Boot layout |
+| `mkdt.sh` | Linux DTB / DTBO compilation |
+| `buildimage.sh` | UBI and `boot.itb` |
 
-## Correct Rebuild Procedure After a Patch Change
+> [!NOTE]
+> Patches modify source code only. Device-tree compilation, NAND binary layout, and final system-image generation are separate build stages.
 
-### After Changing a Linux Patch
+---
 
-From the Buildroot root directory in Linux or WSL, run:
+## Correct Rebuild Procedure
+
+### After Modifying a Linux Patch
 
 ```bash
 make cra_epass_defconfig
@@ -245,7 +428,7 @@ make linux-dirclean
 make linux
 ```
 
-### After Changing a U-Boot Patch
+### After Modifying a U-Boot Patch
 
 ```bash
 make cra_epass_defconfig
@@ -253,67 +436,70 @@ make uboot-dirclean
 make uboot
 ```
 
-### Complete System Build
+### Complete System
 
 ```bash
 make
 ```
 
-After a patch changes, run the corresponding `*-dirclean` target so Buildroot extracts a clean source tree and reapplies the patch series. Running only:
+### Why `*-dirclean` Is Required
+
+```mermaid
+flowchart LR
+    A["Modify a patch"] --> B["*-dirclean"]
+    B --> C["Delete the old source tree"]
+    C --> D["Extract the official source again"]
+    D --> E["Reapply shared patches"]
+    E --> F["Reapply CRA patches"]
+    F --> G["Reconfigure / rebuild"]
+```
+
+Running only:
 
 ```bash
 make linux-rebuild
 make uboot-rebuild
 ```
 
-will not normally repeat an already completed patch stage and may continue using stale source under `output/build/`.
+does not normally rerun a patch stage that has already completed.
 
-These build commands only generate files. They do not automatically write anything to a physical device. Flashing a complete image, replacing U-Boot, updating the kernel, and uploading the main application are separate operations.
+> [!WARNING]
+> Modifying a patch file does not mean that the source under `output/build/` has been updated.
 
-## Line Endings and Windows Checkouts
+> [!NOTE]
+> These commands only generate files; they do not flash a physical device automatically.
 
-The project previously encountered the following problems after a Windows checkout:
+---
 
-- CRLF shell scripts produced `/bin/sh^M` errors.
-- Git symbolic links became regular files containing only the textual target path.
-- Different patches mixed CRLF and LF line endings.
-- An earlier patch created an LF file that a later CRLF patch could not match.
+## Validation Status
 
-All Linux and U-Boot patches in this directory now use LF line endings.
+The following checks have been completed:
 
-After adding or changing patches, check them before committing:
+- All 13 Linux patches parse correctly as unified diffs
+- All 5 U-Boot patches parse correctly as unified diffs
+- Every patch uses LF line endings
+- The shared SUNIV Linux patches and CRA Linux patches apply in sequence to a clean Linux 5.4.99 tree
+- Linux Kconfig recognizes the `CONFIG_CRA_EP_*` options
+- The shared SUNIV U-Boot patches and CRA U-Boot patches apply in Buildroot order
+- The current U-Boot patches have passed compilation validation
 
-```bash
-file board/cra/epass/patch/linux/*.patch
-file board/cra/epass/patch/uboot/*.patch
+```mermaid
+flowchart LR
+    A["Patch parse"] --> B["Patch apply"]
+    B --> C["Kconfig"]
+    C --> D["Linux / U-Boot build"]
+    D --> E["System image"]
+    E --> F["Device boot"]
+    F --> G["Display / USB / audio / NAND / DFU"]
 ```
 
-Do not conceal checkout problems by disabling Buildroot hash verification, skipping failed patches, or editing `output/build/` directly.
+> [!IMPORTANT]
+> The existing checks confirm that the current patch sequence, naming, and configuration relationships remain suitable for builds. They do not replace a complete system build or physical-hardware validation.
 
-## Secondary Development Principles
+---
 
-1. Record permanent changes in patches, configuration files, device trees, or traceable upstream commits.
-2. Do not make long-term changes directly under `output/build/linux-5.4.99/` or `output/build/uboot-2020.07/`.
-3. Give new patches four-digit numeric prefixes and document their dependencies and scope.
-4. After changing an earlier patch, recheck every later patch.
-5. Keep Kconfig, defconfig, device trees, and drivers consistent.
-6. Keep the private UAPI ABI consistent between the kernel and userspace.
-7. Use LF for every text patch.
-8. Preserve original author attribution and license information.
-9. Do not treat successful patch application as proof of successful compilation.
-10. Do not treat successful compilation as proof of correct operation on physical hardware.
-11. Build validation does not authorize flashing or modifying a physical device.
+<div align="center">
 
-## Current Validation Status
+<sub><b>CRA Electric Pass</b> · Linux 5.4.99 & U-Boot board patch set</sub>
 
-The following checks have been completed for this directory:
-
-- All 13 Linux patches can be parsed as valid unified diffs.
-- All 5 U-Boot patches can be parsed as valid unified diffs.
-- Every patch uses LF line endings.
-- The shared SUNIV Linux patches and CRA Linux patches can be applied in order to a clean Linux 5.4.99 source tree.
-- Linux Kconfig recognizes the `CONFIG_CRA_EP_*` options.
-- The shared SUNIV U-Boot patches and CRA U-Boot patches can be applied in Buildroot order.
-- The current U-Boot patch series has passed compilation verification.
-
-These checks show that the current patch series, naming, and configuration relationships remain suitable for further builds. They do not replace a complete system build or physical testing of boot, display, USB, audio, SPI-NAND, and DFU behavior.
+</div>
