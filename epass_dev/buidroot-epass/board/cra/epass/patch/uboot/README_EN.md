@@ -1,14 +1,31 @@
+<div align="center">
+
 # CRA Electric Pass U-Boot Patches
 
-Read this in other languages: [English](README_EN.md), [中文](README.md).
+<sub>Read this in other languages: [English](README_EN.md), [中文](README.md).</sub>
 
-This directory contains the board-level patches added to U-Boot 2020.07 for CRA Electric Pass. They primarily cover the boot console, USB DFU, SPI-NAND identification, the SUNIV SPI clock, and post-write NAND verification.
+</div>
 
-These patches affect both the SPL and main U-Boot stages. SPL handles the earliest DRAM, SPI, and NAND boot operations. Main U-Boot loads the boot environment, reads the FIT image, assembles the Linux device tree, and provides DFU when booting fails or the user requests it.
+> [!NOTE]
+> This directory contains the board-specific patches added by CRA Electric Pass for **U-Boot**. They primarily cover the boot UART, USB DFU, SPI-NAND detection, SUNIV SPI clocks, and NAND post-write verification.
 
-## Build Integration
+<p align="center">
+  <a href="#build-relationships">Build Relationships</a> ·
+  <a href="#patch-overview">Patch Overview</a> ·
+  <a href="#spl-stage">SPL</a> ·
+  <a href="#main-u-boot-stage">Main U-Boot</a> ·
+  <a href="#boot-flow">Boot Flow</a> ·
+  <a href="#configuration-and-device-tree">Configuration / DTS</a> ·
+  <a href="#nand-image">NAND Image</a> ·
+  <a href="#build-procedure">Build Procedure</a> ·
+  <a href="#validation-status">Validation Status</a>
+</p>
 
-The board-level Buildroot configuration specifies the patch directory as follows:
+---
+
+## Build Relationships
+
+Buildroot configuration:
 
 ```make
 BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE="2020.07"
@@ -16,31 +33,72 @@ BR2_TARGET_UBOOT_PATCH="board/allwinner/suniv-f1c100s/patch/u-boot board/cra/epa
 BR2_TARGET_UBOOT_CUSTOM_CONFIG_FILE="board/cra/epass/uboot.defconfig"
 ```
 
-The build sequence is:
+Effective build flow:
 
-```text
-Official U-Boot 2020.07 source
-        │
-        ▼
-board/allwinner/suniv-f1c100s/patch/u-boot
-        │
-        ▼
-board/cra/epass/patch/uboot
-        │
-        ▼
-board/cra/epass/uboot.defconfig
-        │
-        ▼
-Build SPL and main U-Boot
-        │
-        ▼
-board/cra/epass/scripts/mknanduboot.sh
-        │
-        ▼
-u-boot-sunxi-with-nand-spl.bin
+```mermaid
+flowchart TB
+    A["Original U-Boot 2020.07 source"]
+    B["Shared SUNIV patches<br/>board/allwinner/suniv-f1c100s/patch/u-boot"]
+    C["CRA board patches<br/>board/cra/epass/patch/uboot"]
+    D["uboot.defconfig"]
+    E["Build SPL + main U-Boot"]
+    F["u-boot-sunxi-with-spl.bin"]
+    G["mknanduboot.sh"]
+    H["u-boot-sunxi-with-nand-spl.bin"]
+
+    A --> B --> C --> D --> E --> F --> G --> H
 ```
 
-## Directory Overview
+> [!IMPORTANT]
+> The patches in this directory are applied on top of the shared SUNIV U-Boot patch set. Their numbers define both application order and dependency order.
+
+---
+
+## Patch Overview
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+### Boot Fundamentals
+
+`0001` · `0003` · `0004`
+
+Covers:
+
+- UART0 default levels
+- SPI-NAND detection in SPL
+- SUNIV SPI clocking and division
+
+These patches directly affect whether SPL can read main U-Boot reliably.
+
+</td>
+<td width="33%" valign="top">
+
+### USB / DFU
+
+`0002` · `0005`
+
+Covers:
+
+- U-Boot USB Full-Speed operation
+- MTD DFU post-write verification
+- NAND bad-block skipping and retries
+
+</td>
+<td width="33%" valign="top">
+
+### Maintenance Priorities
+
+- Both SPL and main U-Boot are affected
+- SPI clock assumptions must remain consistent with the clock tree
+- NAND IDs must be considered in both SPL and MTD
+- The DFU bad-block policy must not be overly aggressive
+- The patch stage must be rerun after a patch is modified
+
+</td>
+</tr>
+</table>
 
 ```text
 patch/uboot/
@@ -52,17 +110,19 @@ patch/uboot/
 └─ README.md
 ```
 
-| Number | Primary purpose | Affected stage |
-| --- | --- | --- |
-| `0001` | Configure pull-ups on UART0 TX/RX | SPL and early U-Boot console |
-| `0002` | Force the U-Boot MUSB Gadget controller to Full-Speed | U-Boot USB and DFU |
-| `0003` | Identify two Macronix SPI-NAND devices in SPL | SPL boot from NAND |
-| `0004` | Correct the SUNIV SPI parent clock and divider calculation | SPL and main U-Boot SPI |
-| `0005` | Add post-write verification and bad-block handling to MTD DFU | Main U-Boot DFU |
+| Number | Main purpose | Affected stage |
+| :---: | :--- | :--- |
+| `0001` | Pull-ups on UART0 TX / RX | SPL / early U-Boot UART |
+| `0002` | Forces MUSB Gadget to use Full-Speed | Main U-Boot USB / DFU |
+| `0003` | Detects Macronix SPI-NAND | SPL NAND boot |
+| `0004` | Corrects the SUNIV SPI parent clock and dividers | SPL / main U-Boot SPI |
+| `0005` | MTD DFU post-write verification and bad-block handling | Main U-Boot DFU |
 
-## Patch Details
+---
 
-### 0001: UART0 Pin Pull-Ups
+# SPL Stage
+
+## `0001` · UART0 Pin Pull-Ups
 
 Target file:
 
@@ -70,203 +130,263 @@ Target file:
 arch/arm/mach-sunxi/board.c
 ```
 
-SUNIV UART0 uses:
+UART0 uses:
 
 ```text
-PE0: UART0 TX
-PE1: UART0 RX
+PE0 = TX
+PE1 = RX
 ```
 
-The original code already configures a pull-up on PE1. This patch adds the same configuration for PE0:
+The patch adds:
 
 ```c
 sunxi_gpio_set_pull(SUNXI_GPE(0), SUNXI_GPIO_PULL_UP);
 ```
 
-This gives TX and RX consistent default levels during early boot, before the serial driver is fully stable, or while no external serial adapter is connected.
+The original code already configures a pull-up for PE1. This patch gives both TX and RX consistent default levels.
 
-The patch changes only the pin bias. It does not change:
+### Unaffected Settings
 
-- The UART baud rate.
-- The serial controller index.
-- The `console=ttyS0,115200` kernel argument.
-- The Linux UART driver used after the kernel starts.
+- UART baud rate
+- UART controller index
+- Linux `console=ttyS0,115200`
+- Linux UART driver after the kernel starts
 
-### 0002: Force U-Boot MUSB to Full-Speed
+> [!NOTE]
+> This patch changes only the GPIO bias during early boot; it does not alter UART protocol parameters.
 
-Target files:
+---
 
-```text
-drivers/usb/musb-new/musb_core.c
-drivers/usb/musb-new/musb_gadget.c
-```
+## `0003` · Macronix SPI-NAND Detection in SPL
 
-This patch stops setting the following bit when MUSB starts:
-
-```text
-MUSB_POWER_HSENAB
-```
-
-It also clears the bit again during USB Gadget wakeup and resume, preventing the controller from returning to High-Speed mode.
-
-It affects U-Boot-stage USB Gadget functions, including:
-
-- DFU.
-- U-Boot USB downloads.
-- Other U-Boot features that depend on the MUSB Gadget controller.
-
-It does not control USB speed after Linux starts. During the Linux stage, USB speed is determined by the Linux MUSB driver and the `cra,usb-hs-enabled` property introduced by the Linux patch series.
-
-The current patch modifies only the implementation actually used by U-Boot 2020.07:
-
-```text
-drivers/usb/musb-new/
-```
-
-An earlier version also referenced an obsolete MUSB path that no longer exists. That invalid part has been removed.
-
-### 0003: Macronix SPI-NAND Identification in SPL
-
-Target file:
+Target:
 
 ```text
 arch/arm/mach-sunxi/spl_spi_sunxi.c
 ```
 
-After DRAM initialization, SPL must determine whether the device attached to SPI0 is SPI-NOR or SPI-NAND before it can load main U-Boot using the correct method.
+After DRAM initialization, SPL must determine whether SPI0 is connected to SPI-NOR or SPI-NAND before selecting the method used to load main U-Boot.
 
-This patch adds two Macronix chip IDs:
+Added IDs:
 
-| Manufacturer and device ID | Model |
-| --- | --- |
+| Manufacturer / Device ID | Model |
+| :--- | :--- |
 | `c2 12` | MX35LF1GE4AB |
 | `c2 14` | MX35LF1G24AD |
 
-When either ID matches, SPL sets the flash type to:
+After a successful match:
 
 ```c
 FLASHTYPE_NAND
 ```
 
-This patch handles only flash-type identification during SPL. Complete SPI-NAND access, bad-block support, and MTD operation in main U-Boot also depend on:
+```mermaid
+flowchart LR
+    A["SPL"] --> B["Read SPI ID"]
+    B --> C{"Macronix match?"}
+    C -- Yes --> D["FLASHTYPE_NAND"]
+    D --> E["Load main U-Boot as SPI-NAND"]
+```
 
-- The shared SUNIV U-Boot patch series.
-- `CONFIG_MTD_SPI_NAND=y`.
-- The SPI0 device-tree node.
-- The SPI-NAND driver for the relevant manufacturer.
+> [!IMPORTANT]
+> This patch handles only **flash-type detection during SPL**. SPI-NAND reads and writes, MTD, and bad-block handling in main U-Boot still depend on the shared SUNIV patches, Kconfig, the device tree, and the vendor driver.
 
-### 0004: SUNIV SPI Clock Corrections
+---
 
-Target file:
+## `0004` · SUNIV SPI Clock Correction
+
+Target:
 
 ```text
 drivers/spi/spi-sunxi.c
 ```
 
-The original U-Boot driver uses the same 24 MHz constant for both the SPI parent clock and the maximum bus rate, and defaults to 1 MHz when the device tree does not specify a frequency. This does not match the actual clock structure of the SUNIV/F1C100S/F1C200S.
+The original logic treats 24 MHz as both the SPI parent clock and the maximum SPI rate, and defaults to 1 MHz when the device tree does not specify a frequency. This does not match the actual SUNIV / F1C100S / F1C200S clock structure.
 
-This patch adds the following values to each SoC variant:
+The patch adds:
 
 ```c
 u32 mod_clk_hz;
 u32 max_speed_hz;
 ```
 
-The current SUNIV assumptions are:
+Current SUNIV assumptions:
 
-| Parameter | Value |
-| --- | --- |
+| Parameter | Current value |
+| :--- | ---: |
 | SPI divider parent clock | 200 MHz |
 | Maximum SPI bus frequency | 100 MHz |
-| Current SPI-NAND device-tree limit | 80 MHz |
+| Current SPI-NAND DTS limit | 80 MHz |
 
-The 200 MHz parent clock comes from the SPL configuration:
+The 200 MHz value comes from:
 
 ```text
 PLL_PERIPH / 3
 ```
 
-The driver calculates the CDR1/CDR2 dividers with upward rounding so that the actual SPI clock does not exceed the requested rate. If the device tree does not specify a frequency, the driver now uses the maximum rate of the corresponding SoC variant instead of the old fixed 1 MHz fallback.
-
-The current U-Boot device tree uses:
+Current device tree:
 
 ```dts
 spi-max-frequency = <80000000>;
 ```
 
-This patch therefore directly affects SPI-NAND boot-read performance and stability.
+The driver rounds the CDR1 / CDR2 divider calculation upward to ensure that the actual SPI clock does not exceed the requested value.
 
-If the SPL clock configuration, AHB clock, or `PLL_PERIPH` is changed later, the hard-coded 200 MHz parent-clock assumption must be reviewed. An incorrect parent-clock value will produce an SPI rate different from the requested value and may cause intermittent SPL read failures.
+```mermaid
+flowchart LR
+    A["200 MHz parent"] --> B["CDR1 / CDR2 divider"]
+    B --> C["≤ Requested clock"]
+    C --> D["SPI-NAND"]
+```
 
-### 0005: DFU Post-Write Verification and Bad-Block Handling
+> [!CAUTION]
+> After changing the SPL clock, AHB clock, or `PLL_PERIPH`, recheck the hard-coded 200 MHz assumption. An incorrect parent clock directly affects SPL boot-read reliability.
 
-Target file:
+---
+
+# Main U-Boot Stage
+
+## `0002` · Force MUSB to Full-Speed
+
+Targets:
+
+```text
+drivers/usb/musb-new/musb_core.c
+drivers/usb/musb-new/musb_gadget.c
+```
+
+The patch no longer sets:
+
+```text
+MUSB_POWER_HSENAB
+```
+
+and continues to clear the bit during the Gadget wake-up / resume flow.
+
+Affected functions:
+
+- DFU
+- U-Boot USB download
+- Other U-Boot features based on MUSB Gadget
+
+```mermaid
+flowchart LR
+    A["U-Boot MUSB Gadget"] --> B["Clear HSENAB"]
+    B --> C["USB Full-Speed"]
+    C --> D["DFU / download"]
+```
+
+> [!NOTE]
+> This patch affects only U-Boot. Linux USB speed is controlled by the Linux MUSB driver and `cra,usb-hs-enabled`.
+
+The current patch modifies only the path actually used by U-Boot 2020.07:
+
+```text
+drivers/usb/musb-new/
+```
+
+---
+
+## `0005` · DFU Post-Write Verification and Bad-Block Handling
+
+Target:
 
 ```text
 drivers/dfu/dfu_mtd.c
 ```
 
-The original U-Boot MTD DFU write path does not immediately read back and compare data after a successful write call. With SPI-NAND, some write failures may therefore remain undetected until the next boot or read operation.
+Enhanced write flow:
 
-This patch adds the following behavior:
+```mermaid
+flowchart TB
+    A["DFU input data"]
+    B["Limit to current erase block"]
+    C["Write to NAND"]
+    D["Read back immediately"]
+    E{"Length / data match?"}
+    F["Continue to the next segment"]
+    G["Mark current block as bad"]
+    H["Find the next usable block"]
+    I["Erase replacement block"]
+    J{"Space remaining?"}
+    K["Return -ENOSPC"]
 
-1. Allocate a verification buffer equal to one NAND erase block when writing.
-2. Limit each write to the remaining space in the current erase block.
-3. Read the data back through MTD immediately after each write.
-4. Compare the returned length and data with the original write.
-5. Mark the current block as bad if the write or verification fails.
-6. Skip known bad blocks and search for the next usable block.
-7. Erase the replacement block and retry the current data.
-8. Return `-ENOSPC` when no usable space remains.
-
-This patch improves the reliability of DFU writes to SPI-NAND, but introduces two behaviors that require attention:
-
-- A single write or readback failure may permanently mark the current block as bad.
-- The verification buffer is as large as one NAND erase block and consumes additional U-Boot heap memory.
-
-If a failure is caused by unstable power, a USB interruption, an excessively high SPI clock, or a transient signal problem rather than permanent NAND damage, marking the block as bad may be too aggressive. DFU operations should therefore be performed with stable power, USB connectivity, and SPI timing.
-
-## Role in the Boot Chain
-
-```text
-Device power-on
-   │
-   ▼
-SPL initializes DRAM, UART0, and SPI0
-   │        │
-   │        ├─ 0001 Stabilizes the UART0 pin levels
-   │        └─ 0004 Calculates the SUNIV SPI clock correctly
-   │
-   ▼
-SPL reads the SPI chip ID
-   │
-   └─ 0003 Identifies the Macronix MX35LF1G family as SPI-NAND
-   │
-   ▼
-Load main U-Boot from NAND
-   │
-   ▼
-Main U-Boot reads the environment and boot.itb
-   │
-   ├─ Normal path: boot Linux
-   │
-   └─ Failure or user request: enter DFU
-             │
-             ├─ 0002 Forces USB Full-Speed
-             └─ 0005 Verifies writes and skips bad blocks
+    A --> B --> C --> D --> E
+    E -- Yes --> F
+    E -- No --> G --> H --> J
+    J -- Yes --> I --> C
+    J -- No --> K
 ```
 
-## Relationship to Configuration, Device Trees, and Scripts
+The patch adds:
+
+- Erase-block-sized segmentation
+- Immediate read-back after writing
+- Length verification
+- Data comparison
+- Bad-block marking after a write or verification failure
+- Skipping known bad blocks
+- Retrying on a replacement block
+- Returning `-ENOSPC` when space is exhausted
+
+### Important Considerations
+
+| Behavior | Risk |
+| :--- | :--- |
+| A block is marked bad after one failure | A transient communication failure may be treated as permanent media damage |
+| An erase-block-sized verification buffer | Increases U-Boot heap usage |
+
+> [!WARNING]
+> Ensure stable power, USB connectivity, and SPI timing during DFU. Power fluctuations, USB interruptions, or an excessive SPI rate can cause blocks to be marked bad incorrectly.
+
+---
+
+## Boot Flow
+
+Placement of the five patches in the boot process:
+
+```mermaid
+flowchart TB
+    A["Device powers on"]
+    B["SPL initializes DRAM / UART0 / SPI0"]
+    C["0001 · UART pull-ups"]
+    D["0004 · SPI clock"]
+    E["Read SPI ID"]
+    F["0003 · Macronix NAND detection"]
+    G["Load main U-Boot from NAND"]
+    H["Main U-Boot"]
+    I["Read environment / boot.itb"]
+    J{"Normal boot?"}
+    K["Linux"]
+    L["DFU"]
+    M["0002 · USB Full-Speed"]
+    N["0005 · Verification / bad blocks"]
+
+    A --> B
+    B --> C
+    B --> D
+    C --> E
+    D --> E
+    E --> F --> G --> H --> I --> J
+    J -- Yes --> K
+    J -- No / user request --> L
+    L --> M
+    L --> N
+```
+
+---
+
+## Configuration and Device Tree
 
 ### U-Boot Configuration
 
-The relevant configuration is:
+Location:
 
 ```text
 board/cra/epass/uboot.defconfig
 ```
 
-The primary options include:
+Related options:
 
 ```text
 CONFIG_SPL=y
@@ -282,33 +402,34 @@ CONFIG_USB_MUSB_GADGET=y
 CONFIG_USB_GADGET_DOWNLOAD=y
 ```
 
-If a relevant option is disabled, a patch may still apply successfully even though the affected code is no longer compiled or executed.
+> [!IMPORTANT]
+> A patch applying successfully does not guarantee that its code will be compiled. If Kconfig does not enable the corresponding feature, the patched logic may not be included in the final image.
 
 ### U-Boot Device Tree
 
-The relevant device tree is located under:
+Location:
 
 ```text
 board/cra/epass/devicetree/uboot/
 ```
 
-Its SPI0 and `spi-nand@0` nodes define:
+The SPI0 and `spi-nand@0` nodes declare:
 
-- The SPI0 pins.
-- The SPI-NAND chip select.
-- The 80 MHz maximum frequency.
-- The NAND device status.
+- SPI0 pinctrl
+- SPI-NAND chip select
+- Maximum requested frequency of 80 MHz
+- NAND node status
 
-### Partition Names
+### MTD Partitions
 
-The current U-Boot configuration uses:
+Current configuration:
 
 ```text
 spi-nand0=cranand
 mtdparts=cranand:1M(u-boot)ro,6M(boot),-(rootfs)
 ```
 
-Patch `0005` performs writes, verification, and bad-block skipping within the partition ranges supplied by MTD and DFU. When changing the partition layout, review all of the following together:
+When changing the partition layout, also check:
 
 ```text
 board/cra/epass/uboot.defconfig
@@ -317,31 +438,61 @@ board/cra/epass/scripts/
 Linux bootargs
 ```
 
-### NAND Boot-Image Post-Processing
+```mermaid
+flowchart LR
+    A["MTD layout"] --> B["U-Boot configuration"]
+    A --> C["uboot.env"]
+    A --> D["Image scripts"]
+    A --> E["Linux bootargs"]
+```
 
-Buildroot first produces:
+---
+
+# NAND Image
+
+Buildroot first generates:
 
 ```text
 u-boot-sunxi-with-spl.bin
 ```
 
-It then runs:
+Then:
 
 ```text
 board/cra/epass/scripts/mknanduboot.sh
 ```
 
-The script rearranges SPL for the 2 KiB NAND page layout, places main U-Boot at `0xD000`, and produces:
+rearranges SPL for a **2 KiB NAND page layout** and places main U-Boot at:
+
+```text
+0xD000
+```
+
+The final output is:
 
 ```text
 output/images/u-boot-sunxi-with-nand-spl.bin
 ```
 
-The patches in this directory do not perform that binary rearrangement. A successful patch application and U-Boot build do not prove that NAND image post-processing completed successfully; the final output file must be checked separately.
+```mermaid
+flowchart LR
+    A["u-boot-sunxi-with-spl.bin"]
+    B["mknanduboot.sh"]
+    C["Rearrange SPL"]
+    D["Main U-Boot @ 0xD000"]
+    E["u-boot-sunxi-with-nand-spl.bin"]
 
-## Rebuilding After a Patch Change
+    A --> B --> C --> D --> E
+```
 
-From the Buildroot root directory in Linux or WSL, run:
+> [!CAUTION]
+> A successful patch build does not guarantee that NAND image post-processing succeeded. The physical device uses `u-boot-sunxi-with-nand-spl.bin`; verify this final output separately.
+
+---
+
+## Build Procedure
+
+After modifying a patch in this directory:
 
 ```bash
 make cra_epass_defconfig
@@ -349,7 +500,22 @@ make uboot-dirclean
 make uboot
 ```
 
-After changing a patch, use `uboot-dirclean` so Buildroot extracts a fresh U-Boot 2020.07 source tree and reapplies both the shared and CRA patch series from the beginning.
+To continue generating the complete image set:
+
+```bash
+make
+```
+
+### Why Use `uboot-dirclean`
+
+```mermaid
+flowchart LR
+    A["Modify a patch"] --> B["uboot-dirclean"]
+    B --> C["Extract U-Boot 2020.07 again"]
+    C --> D["Reapply SUNIV patches"]
+    D --> E["Reapply CRA patches"]
+    E --> F["Reconfigure / rebuild"]
+```
 
 Running only:
 
@@ -357,39 +523,41 @@ Running only:
 make uboot-rebuild
 ```
 
-will not normally repeat an already completed patch stage and may continue building the old source under `output/build/uboot-2020.07/`.
+does not normally rerun a patch stage that has already completed.
 
-To generate the final images, continue with:
+> [!CAUTION]
+> Build commands do not write anything to a physical device automatically. Flashing `u-boot-sunxi-with-nand-spl.bin` modifies the earliest boot region and must be treated as a separate operation.
 
-```bash
-make
+---
+
+## Validation Status
+
+The following checks have been completed:
+
+- All five CRA U-Boot patches parse correctly as unified diffs
+- CRA Linux and U-Boot patches use LF line endings
+- The shared SUNIV patches and all five CRA patches apply in Buildroot order
+- `0002-musb-force-fs.patch` modifies only the `drivers/usb/musb-new/` path that exists in U-Boot 2020.07
+- The current U-Boot configuration recognizes the relevant CRA, SPI-NAND, DFU, MTD, SPL, and MUSB options
+- All five patches have passed a U-Boot compilation check
+
+```mermaid
+flowchart LR
+    A["Patch parse"] --> B["Patch apply"]
+    B --> C["Kconfig"]
+    C --> D["U-Boot build"]
+    D --> E["SPL boot"]
+    E --> F["SPI-NAND read"]
+    F --> G["DFU recovery"]
 ```
 
-Build commands do not automatically write anything to a physical device. Flashing `u-boot-sunxi-with-nand-spl.bin` modifies the earliest boot area of the device and carries substantially more risk than replacing the main application. It must be authorized as a separate operation.
+> [!IMPORTANT]
+> The existing checks confirm that the patch sequence and build relationships are valid. They do not replace physical-device boot testing, UART validation, long-duration SPI-NAND read/write testing, or DFU failure-recovery testing.
 
-## Secondary Development Principles
+---
 
-1. Do not treat `output/build/uboot-2020.07/` as a permanent source directory. `uboot-dirclean` removes any changes made there.
-2. Record permanent modifications as patches in this directory, or reorganize them into traceable commits when upgrading U-Boot.
-3. Give new patches four-digit numeric prefixes, and state whether they depend on SPL, main U-Boot, the shared SUNIV patches, or another CRA patch.
-4. Keep every patch in LF format to prevent Windows CRLF line endings from breaking patch context matching.
-5. When changing the SPI parent clock or maximum rate, validate both SPL boot reads and main U-Boot MTD access.
-6. Before adding an SPI-NAND ID, verify the manufacturer ID, device ID, page size, erase-block size, OOB layout, and ECC requirements.
-7. When changing the DFU bad-block policy, distinguish permanent media failures from transient communication failures.
-8. When changing the partition layout, review the U-Boot configuration, environment, image scripts, and Linux boot arguments together.
-9. Do not remove original author attribution or hardware-vendor names. Record CRA modifications through additional documentation and Git history.
-10. Patch application, successful compilation, successful image boot, and reliable DFU writes are four separate validation stages.
+<div align="center">
 
-## Current Validation Status
+<sub><b>CRA Electric Pass</b> · U-Boot board patch set</sub>
 
-The following checks have been completed for this directory:
-
-- All five patches can be parsed as valid unified diffs.
-- All CRA Linux and U-Boot patches use LF line endings.
-- The shared SUNIV U-Boot patches and all five patches in this directory can be applied in Buildroot order.
-- The corrected `0002-musb-force-fs.patch` modifies only the `drivers/usb/musb-new/` implementation that exists in U-Boot 2020.07.
-- The current U-Boot configuration recognizes the CRA identity, SPI-NAND, DFU, MTD, SPL, and MUSB options.
-- The current set of five patches has passed a U-Boot compilation check.
-
-These checks do not replace testing of physical-device boot, serial output, sustained SPI-NAND access, or DFU failure recovery.
-
+</div>
