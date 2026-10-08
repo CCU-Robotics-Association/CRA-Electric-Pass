@@ -4,7 +4,7 @@
 #
 ################################################################################
 LIBCEDARX_VERSION = 6215f1c9465d2f23f02930957a0bacdda0878bb1
-LIBCEDARX_SITE = https://github.com/rhodesepass/libcedarx.git
+LIBCEDARX_SITE = https://github.com/CCU-Robotics-Association/libcedarx.git
 LIBCEDARX_SITE_METHOD = git
 LIBCEDARX_DEPENDENCIES = openssl libcedarc
 LIBCEDARX_INSTALL_STAGING = YES

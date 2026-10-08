@@ -3,4 +3,4 @@ config BR2_PACKAGE_EPASSCTL
 	help
 	  Electronic Pass cli for epass_drm_app.
 
-	  https://github.com/rhodesepass/epassctl
+	  https://github.com/CCU-Robotics-Association/epassctl

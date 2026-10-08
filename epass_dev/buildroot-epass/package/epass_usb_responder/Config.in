@@ -3,4 +3,4 @@ config BR2_PACKAGE_EPASS_USB_RESPONDER
 	help
 	  Electronic Pass USB Responder.
 
-	  https://github.com/rhodesepass/epass_usb_responder
+	  https://github.com/CCU-Robotics-Association/epass_usb_responder

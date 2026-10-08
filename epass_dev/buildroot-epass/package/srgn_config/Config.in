@@ -4,4 +4,4 @@ config BR2_PACKAGE_SRGN_CONFIG
 	  Shirogane Config is a raspi-config like tool
 	  to configure device tree in epass devices.
 
-	  https://github.com/rhodesepass/srgn_config
+	  https://github.com/CCU-Robotics-Association/srgn_config

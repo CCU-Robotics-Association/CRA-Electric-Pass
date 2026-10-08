@@ -6,7 +6,7 @@
 
 
 SRGN_CONFIG_VERSION = V0.1
-SRGN_CONFIG_SITE = https://github.com/rhodesepass/srgn_config.git
+SRGN_CONFIG_SITE = https://github.com/CCU-Robotics-Association/srgn_config.git
 SRGN_CONFIG_SITE_METHOD = git
 
 define SRGN_CONFIG_INSTALL_TARGET_CMDS

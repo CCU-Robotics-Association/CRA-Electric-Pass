@@ -6,7 +6,7 @@
 
 
 EPASS_USB_RESPONDER_VERSION = e57e74b8bf0611091e9fb6841ffa84be78260f03 
-EPASS_USB_RESPONDER_SITE = https://github.com/rhodesepass/epass_usb_responder.git
+EPASS_USB_RESPONDER_SITE = https://github.com/CCU-Robotics-Association/epass_usb_responder.git
 EPASS_USB_RESPONDER_SITE_METHOD = git
 EPASS_USB_RESPONDER_DEPENDENCIES = 
 EPASS_USB_RESPONDER_CONF_OPTS = 
