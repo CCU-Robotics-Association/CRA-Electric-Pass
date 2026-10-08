@@ -1,0 +1,41 @@
+#include <dt-bindings/gpio/gpio.h>
+/dts-v1/;
+/plugin/;
+/ {
+    fragment@1 {
+        target-path = "/";
+        __overlay__ {
+            sound_i2s {
+                compatible = "simple-audio-card";
+                status = "okay";
+                simple-audio-card,name = "es8311";
+                simple-audio-card,format = "i2s";
+                simple-audio-card,mclk-fs = <256>;
+
+                simple-audio-card,cpu {
+                    sound-dai = <&i2s0>;
+                };
+
+                simple-audio-card,codec {
+                    sound-dai = <&es8311>;
+                };
+            };
+
+            i2c_bitbang {
+                compatible = "i2c-gpio";
+                sda-gpios = <&pio 3 0 (GPIO_ACTIVE_HIGH|GPIO_OPEN_DRAIN)>; /* PD0 */
+                scl-gpios = <&pio 3 12 (GPIO_ACTIVE_HIGH|GPIO_OPEN_DRAIN)>; /* PD12 */
+                i2c-gpio,delay-us = <5>;
+                status = "okay";
+
+                es8311: es8311@18 {
+                    compatible = "everest,es8311";
+                    status = "okay";
+                    reg = <0x18>;
+                    pinctrl-names = "default";
+                    #sound-dai-cells = <0>;
+                };
+            };
+        };
+    };
+};

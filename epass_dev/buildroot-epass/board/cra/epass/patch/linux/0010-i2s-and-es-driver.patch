@@ -1,0 +1,4707 @@
+diff --git a/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c b/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c
+index 2602a99a4..1dcc1316d 100644
+--- a/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c
++++ b/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c
+@@ -232,8 +232,10 @@ static const char * const i2s_spdif_parents[] = { "pll-audio-8x",
+ 						  "pll-audio-2x",
+ 						  "pll-audio" };
+ 
++// static SUNXI_CCU_MUX_WITH_GATE(i2s_clk, "i2s", i2s_spdif_parents,
++// 			       0x0b0, 16, 2, BIT(31), 0);
+ static SUNXI_CCU_MUX_WITH_GATE(i2s_clk, "i2s", i2s_spdif_parents,
+-			       0x0b0, 16, 2, BIT(31), 0);
++					0x0b0, 16, 2, BIT(31), CLK_SET_RATE_PARENT);
+ 
+ static SUNXI_CCU_MUX_WITH_GATE(spdif_clk, "spdif", i2s_spdif_parents,
+ 			       0x0b4, 16, 2, BIT(31), 0);
+diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
+index 229cc89f8..22fd339be 100644
+--- a/sound/soc/codecs/Kconfig
++++ b/sound/soc/codecs/Kconfig
+@@ -683,6 +683,22 @@ config SND_SOC_ES8316
+ 	tristate "Everest Semi ES8316 CODEC"
+ 	depends on I2C
+ 
++config SND_SOC_ES8311
++	tristate "Everest Semi ES8311 CODEC"
++	depends on I2C
++
++config SND_SOC_ES8375
++	tristate "Everest Semi ES8375 CODEC"
++	depends on I2C
++
++config SND_SOC_ES8156
++	tristate "Everest Semi ES8156 CODEC"
++	depends on I2C
++
++config SND_SOC_ES8389
++	tristate "Everest Semi ES8389 CODEC"
++	depends on I2C
++
+ config SND_SOC_ES8328
+ 	tristate
+ 
+diff --git a/sound/soc/codecs/Makefile b/sound/soc/codecs/Makefile
+index c498373dc..42e22148c 100644
+--- a/sound/soc/codecs/Makefile
++++ b/sound/soc/codecs/Makefile
+@@ -83,6 +83,10 @@ snd-soc-dmic-objs := dmic.o
+ snd-soc-es7134-objs := es7134.o
+ snd-soc-es7241-objs := es7241.o
+ snd-soc-es8316-objs := es8316.o
++snd-soc-es8311-objs := es8311.o
++snd-soc-es8375-objs := es8375.o
++snd-soc-es8156-objs := es8156.o
++snd-soc-es8389-objs := es8389.o
+ snd-soc-es8328-objs := es8328.o
+ snd-soc-es8328-i2c-objs := es8328-i2c.o
+ snd-soc-es8328-spi-objs := es8328-spi.o
+@@ -367,6 +371,10 @@ obj-$(CONFIG_SND_SOC_DMIC)	+= snd-soc-dmic.o
+ obj-$(CONFIG_SND_SOC_ES7134)	+= snd-soc-es7134.o
+ obj-$(CONFIG_SND_SOC_ES7241)	+= snd-soc-es7241.o
+ obj-$(CONFIG_SND_SOC_ES8316)    += snd-soc-es8316.o
++obj-$(CONFIG_SND_SOC_ES8311)    += snd-soc-es8311.o
++obj-$(CONFIG_SND_SOC_ES8375)    += snd-soc-es8375.o
++obj-$(CONFIG_SND_SOC_ES8156)    += snd-soc-es8156.o
++obj-$(CONFIG_SND_SOC_ES8389)    += snd-soc-es8389.o
+ obj-$(CONFIG_SND_SOC_ES8328)	+= snd-soc-es8328.o
+ obj-$(CONFIG_SND_SOC_ES8328_I2C)+= snd-soc-es8328-i2c.o
+ obj-$(CONFIG_SND_SOC_ES8328_SPI)+= snd-soc-es8328-spi.o
+diff --git a/sound/soc/codecs/es8156.c b/sound/soc/codecs/es8156.c
+new file mode 100644
+index 000000000..535ba0778
+--- /dev/null
++++ b/sound/soc/codecs/es8156.c
+@@ -0,0 +1,958 @@
++/*
++ * SPDX-License-Identifier: GPL-2.0-only
++ * es8156.c -- es8156 ALSA SoC audio driver
++ * Copyright Everest Semiconductor Co.,Ltd
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#include <linux/clk.h>
++#include <linux/module.h>
++
++#include <linux/delay.h>
++#include <linux/i2c.h>
++
++#include <sound/core.h>
++#include <sound/pcm_params.h>
++#include <sound/tlv.h>
++#include <sound/soc.h>
++#include <sound/soc-dapm.h>
++#include <linux/gpio.h>
++#include <linux/interrupt.h>
++#include <linux/irq.h>
++#include <linux/regmap.h>
++#include <linux/delay.h>
++#include "es8156.h"
++
++
++#define INVALID_GPIO -1
++
++static struct snd_soc_component *es8156_codec;
++
++/* codec private data */
++struct es8156_priv {
++	struct regmap *regmap;
++
++	u8 vdda;
++	u8 hp_mode;
++	u8 lineout_mode;
++	u8 eq;
++	u8 mclk_src;
++	u8 mclk_inv;
++	u8 bclk_inv;
++	u8 doubelspeed;
++
++	unsigned int sysclk;
++	struct snd_pcm_hw_constraint_list *sysclk_constraints;
++	struct clk *mclk;
++	int debounce_time;
++	int hp_det_invert;
++	int mastermode;
++	struct delayed_work work;
++
++	int spk_ctl_gpio;
++	int hp_det_gpio;
++	bool muted;
++	bool hp_inserted;
++	bool spk_active_level;
++
++	struct delayed_work init_work;
++	struct mutex init_mlock;
++};
++
++
++static void init_work_events(struct work_struct *work)
++{
++	struct es8156_priv *es8156 = snd_soc_component_get_drvdata(es8156_codec);
++	mutex_lock(&es8156->init_mlock);
++	printk("%s\n", __func__);
++	/*open ClassD here*/
++		
++	mutex_unlock(&es8156->init_mlock);
++}
++
++/*
++ * es8156_reset
++ */
++static int es8156_reset(struct snd_soc_component *codec)
++{
++	snd_soc_component_write(codec, ES8156_RESET_REG00, 0x1c);
++	usleep_range(5000, 5500);
++	return snd_soc_component_write(codec, ES8156_RESET_REG00, 0x03);
++}
++
++static void es8156_enable_spk(struct es8156_priv *es8156, bool enable)
++{
++	bool level;
++
++	level = enable ? es8156->spk_active_level : !es8156->spk_active_level;
++	gpio_set_value(es8156->spk_ctl_gpio, level);
++}
++
++static const char *es8156_DAC_SRC[] = {
++	"Left to Left, Right to Right",
++	"Right to both Left and Right",
++	"Left to both Left & Right",
++	"Left to Right, Right to Left"
++};
++
++static const DECLARE_TLV_DB_SCALE(dac_vol_tlv, -9600, 50, 1);
++static const DECLARE_TLV_DB_SCALE(alc_gain_tlv, -2800, 400, 1);
++static SOC_ENUM_SINGLE_DECL(es8165_dac_enum, ES8156_MISC_CONTROL3_REG18,
++		4, es8156_DAC_SRC);
++static const struct snd_kcontrol_new es8156_DAC_MUX =
++	SOC_DAPM_ENUM("Route", es8165_dac_enum);
++
++/*
++*ES8156 Controls
++*/
++static const struct snd_kcontrol_new es8156_snd_controls[] = {
++	SOC_SINGLE("DAC Automute Gate", ES8156_AUTOMUTE_SET_REG12,
++			4, 15, 0),
++	SOC_SINGLE("ALC ENABLE", ES8156_ALC_CONFIG1_REG15,
++			0, 1, 0),
++	SOC_SINGLE_TLV("ALC Gain", ES8156_ALC_CONFIG1_REG15,
++			1, 7, 1, alc_gain_tlv),
++	SOC_SINGLE("ALC Ramp Rate", ES8156_ALC_CONFIG2_REG16,
++			4, 15, 0),
++	SOC_SINGLE("ALC Window Size", ES8156_ALC_CONFIG2_REG16,
++			0, 15, 0),
++	SOC_DOUBLE("ALC Maximum Minimum Volume", ES8156_ALC_CONFIG3_REG17,
++			4, 0, 15, 0),
++	SOC_SINGLE_TLV("DAC Playback Volume", ES8156_VOLUME_CONTROL_REG14,
++			0, 0xff, 0, dac_vol_tlv),
++	SOC_SINGLE("HP Switch", ES8156_ANALOG_SYS3_REG22, 3, 1, 0),
++	SOC_SINGLE("DAC FS MODE", ES8156_SCLK_MODE_REG02, 1, 1, 0),
++};
++/*
++static const struct snd_kcontrol_new es8156_dac_controls =
++	SOC_DAPM_SINGLE("Switch", ES8156_RESET_REG00, 3, 1, 1);
++*/
++static const struct snd_soc_dapm_widget es8156_dapm_widgets[] = {
++	SND_SOC_DAPM_AIF_OUT("SDOUT", "I2S Capture", 0,
++			ES8156_P2S_CONTROL_REG0D, 2, 0),
++	SND_SOC_DAPM_AIF_IN("SDIN", "I2S Playback", 0,
++			SND_SOC_NOPM, 0, 0),
++	SND_SOC_DAPM_MUX("Channel Select Mux", SND_SOC_NOPM, 0, 0,
++			&es8156_DAC_MUX),
++
++	SND_SOC_DAPM_DAC("DACL", "Left Playback", ES8156_DAC_SDP_REG11, 3, 1),
++	SND_SOC_DAPM_DAC("DACR", "Right Playback", ES8156_DAC_SDP_REG11, 3, 1),
++
++	SND_SOC_DAPM_PGA("SDOUT TRISTATE", ES8156_P2S_CONTROL_REG0D,
++			0, 1, NULL, 0),
++
++	SND_SOC_DAPM_OUTPUT("SDOUT"),
++	SND_SOC_DAPM_OUTPUT("LOUT"),
++	SND_SOC_DAPM_OUTPUT("ROUT"),
++};
++
++static const struct snd_soc_dapm_route es8156_dapm_routes[] = {
++	{"SDOUT TRISTATE", NULL, "SDIN"},
++	{"SDOUT", NULL, "SDOUT TRISTATE"},
++
++	{"Channel Select Mux", "Left to Left, Right to Right", "SDIN"},
++	{"Channel Select Mux", "Right to both Left and Right", "SDIN"},
++	{"Channel Select Mux", "Left to both Left & Right", "SDIN"},
++	{"Channel Select Mux", "Left to Right, Right to Left", "SDIN"},
++
++	{"DACL", NULL, "Channel Select Mux"},
++	{"DACR", NULL, "Channel Select Mux"},
++
++	{ "LOUT", NULL, "DACL" },
++	{ "ROUT", NULL, "DACR" },
++
++};
++
++/*
++ * Clock coefficient structer
++ */
++
++struct _coeff_div {
++		u32	Ratio;				/*Ratio = MCLK/LRKC*/ 			
++    u32 mclk;        /* mclk frequency */
++    u32 rate;        /* sample rate */
++    u8 DoubleSpeed;
++	u8 REG01; 	       
++    u8 DLL_ON;      
++    u8 lrck_h;       
++    u8 lrck_l;
++    u8 bclk_div;     
++    u8 DAC_OSR;
++};
++ 
++static const struct _coeff_div coeff_div[] ={
++    /* 8k */
++    {1536,12288000, 8000, 0x00, 0x26, 0x00, 0x06, 0x00, 0x04, 0x40},
++    {1024,8192000 , 8000, 0x00, 0x24, 0x00, 0x04, 0x00, 0x04, 0x40},
++    {768, 6144000 , 8000, 0x00, 0x23, 0x00, 0x03, 0x00, 0x04, 0x40},
++    {512, 4096000 , 8000, 0x00, 0x22, 0x00, 0x02, 0x00, 0x04, 0x40},
++    {384, 3072000 , 8000, 0x00, 0x63, 0x00, 0x01, 0x80, 0x04, 0x40},
++    {256, 2048000 , 8000, 0x00, 0x21, 0x00, 0x01, 0x00, 0x04, 0x40},
++    {128, 1024000 , 8000, 0x00, 0x61, 0x00, 0x00, 0x80, 0x04, 0x40},
++    {64,  512000  , 8000, 0x00, 0xA1, 0x01, 0x00, 0x40, 0x02, 0x40},
++
++    /* 11.025k */
++    {1536,16934400, 11025, 0x00, 0x26, 0x00, 0x06, 0x00, 0x04, 0x40},
++    {1024,11289600, 11025, 0x00, 0x24, 0x00, 0x04, 0x00, 0x04, 0x40},
++    {768, 8467200 , 11025, 0x00, 0x23, 0x00, 0x03, 0x00, 0x04, 0x40},
++    {512, 5644800 , 11025, 0x00, 0x22, 0x00, 0x02, 0x00, 0x04, 0x40},
++    {384, 4233600 , 11025, 0x00, 0x63, 0x00, 0x01, 0x80, 0x04, 0x40},
++    {256, 2822400 , 11025, 0x00, 0x21, 0x00, 0x01, 0x00, 0x04, 0x40},
++    {128, 1411200 , 11025, 0x00, 0x61, 0x00, 0x00, 0x80, 0x04, 0x40},
++    {64,  705600  , 11025, 0x00, 0xA1, 0x01, 0x00, 0x40, 0x02, 0x40},
++
++    /* 12k */
++    {1536,18432000, 12000, 0x00, 0x26, 0x00, 0x06, 0x00, 0x04, 0x40},
++    {1024,12288000, 12000, 0x00, 0x24, 0x00, 0x04, 0x00, 0x04, 0x40},
++    {768, 9216000 , 12000, 0x00, 0x23, 0x00, 0x03, 0x00, 0x04, 0x40},
++    {512, 6144000 , 12000, 0x00, 0x22, 0x00, 0x02, 0x00, 0x04, 0x40},
++    {384, 4608000 , 12000, 0x00, 0x63, 0x00, 0x01, 0x80, 0x04, 0x40},
++    {256, 3072000 , 12000, 0x00, 0x21, 0x00, 0x01, 0x00, 0x04, 0x40},
++    {128, 1536000 , 12000, 0x00, 0x61, 0x00, 0x00, 0x80, 0x04, 0x40},
++    {64,  768000  , 12000, 0x00, 0xA1, 0x01, 0x00, 0x40, 0x02, 0x40},
++
++    /* 16k */
++    {1536,24576000, 16000, 0x00, 0x26, 0x00, 0x06, 0x00, 0x04, 0x40},
++    {1024,16384000, 16000, 0x00, 0x24, 0x00, 0x04, 0x00, 0x04, 0x40},
++    {768, 12288000, 16000, 0x00, 0x23, 0x00, 0x03, 0x00, 0x04, 0x40},
++    {512, 8192000 , 16000, 0x00, 0x22, 0x00, 0x02, 0x00, 0x04, 0x40},
++    {384, 6144000 , 16000, 0x00, 0x23, 0x00, 0x01, 0x80, 0x04, 0x40},
++    {256, 4096000 , 16000, 0x00, 0x21, 0x00, 0x01, 0x00, 0x04, 0x40},
++    {128, 2048000 , 16000, 0x00, 0x61, 0x00, 0x00, 0x80, 0x04, 0x40}, 
++    {64,  1024000 , 16000, 0x00, 0xA1, 0x01, 0x00, 0x40, 0x02, 0x40},
++
++    /* 22.05k */
++    {1536,33868800, 22050, 0x00, 0x26, 0x00, 0x06, 0x00, 0x04, 0x40},
++    {1024,22579200, 22050, 0x00, 0x24, 0x00, 0x04, 0x00, 0x04, 0x40},
++    {768, 16934400, 22050, 0x00, 0x23, 0x00, 0x03, 0x00, 0x04, 0x40},
++    {512, 11289600, 22050, 0x00, 0x22, 0x00, 0x02, 0x00, 0x04, 0x40},
++    {384, 8467200 , 22050, 0x00, 0x63, 0x00, 0x01, 0x80, 0x04, 0x40},
++    {256, 5644800 , 22050, 0x00, 0x21, 0x00, 0x01, 0x00, 0x04, 0x40},
++    {128, 2822400 , 22050, 0x00, 0x61, 0x00, 0x00, 0x80, 0x04, 0x40}, 
++    {64,  1411200 , 22050, 0x00, 0xA1, 0x01, 0x00, 0x40, 0x02, 0x40},
++
++    /* 24k */
++    {1536,36864000, 24000, 0x00, 0x26, 0x00, 0x06, 0x00, 0x04, 0x40},
++    {1024,24576000, 24000, 0x00, 0x24, 0x00, 0x04, 0x00, 0x04, 0x40},
++    {768, 18432000, 24000, 0x00, 0x23, 0x00, 0x03, 0x00, 0x04, 0x40},
++    {512, 12288000, 24000, 0x00, 0x22, 0x00, 0x02, 0x00, 0x04, 0x40},
++    {384, 9216000 , 24000, 0x00, 0x63, 0x00, 0x01, 0x80, 0x04, 0x40},
++    {256, 6144000 , 24000, 0x00, 0x21, 0x00, 0x01, 0x00, 0x04, 0x40},
++    {128, 3072000 , 24000, 0x00, 0x61, 0x00, 0x00, 0x80, 0x04, 0x40}, 
++    {64,  1536000 , 24000, 0x00, 0xA1, 0x01, 0x00, 0x40, 0x02, 0x40},
++
++    /* 32k */
++    {1024,32768000, 32000, 0x00, 0x24, 0x00, 0x04, 0x00, 0x04, 0x40},
++    {768, 24576000, 32000, 0x00, 0x23, 0x00, 0x03, 0x00, 0x04, 0x40},
++    {512, 16384000, 32000, 0x00, 0x22, 0x00, 0x02, 0x00, 0x04, 0x40},
++    {384, 12288000, 32000, 0x00, 0x63, 0x00, 0x01, 0x80, 0x04, 0x40},
++    {256, 8192000 , 32000, 0x00, 0x21, 0x00, 0x01, 0x00, 0x04, 0x40},
++    {128, 4096000 , 32000, 0x00, 0x61, 0x00, 0x00, 0x80, 0x04, 0x40},
++    {64,  2048000 , 32000, 0x00, 0xA1, 0x01, 0x00, 0x40, 0x02, 0x40},
++
++    /* 44.1k */
++    {768, 33868800, 44100, 0x00, 0x23, 0x00, 0x03, 0x00, 0x04, 0x40},
++    {512, 22579200, 44100, 0x00, 0x22, 0x00, 0x02, 0x00, 0x04, 0x40},
++    {384, 16934400, 44100, 0x00, 0x63, 0x00, 0x01, 0x80, 0x04, 0x40},
++    {256, 11289600, 44100, 0x00, 0x21, 0x00, 0x01, 0x00, 0x04, 0x40},
++    {128, 5644800 , 44100, 0x00, 0x61, 0x00, 0x00, 0x80, 0x04, 0x40},
++    {64,  2822400 , 44100, 0x00, 0xA1, 0x01, 0x00, 0x40, 0x02, 0x40},
++
++    /* 48k */
++    {768, 36864000, 48000, 0x00, 0x23, 0x00, 0x03, 0x00, 0x04, 0x40},
++    {512, 24576000, 48000, 0x00, 0x22, 0x00, 0x02, 0x00, 0x04, 0x40},
++    {384, 18432000, 48000, 0x00, 0x63, 0x00, 0x01, 0x80, 0x04, 0x40},
++    {256, 12288000, 48000, 0x00, 0x21, 0x00, 0x01, 0x00, 0x04, 0x40},
++    {128, 6144000 , 48000, 0x00, 0x61, 0x00, 0x00, 0x80, 0x04, 0x40}, 
++    {64,  3072000 , 48000, 0x00, 0xA1, 0x01, 0x00, 0x40, 0x02, 0x40},
++
++    /* 64k */
++    {512, 32768000, 64000, 0x01, 0x04, 0x00, 0x02, 0x00, 0x04, 0x40}, 
++    {384, 24576000, 64000, 0x01, 0x03, 0x00, 0x01, 0x80, 0x04, 0x40}, 
++    {256, 16384000, 64000, 0x01, 0x02, 0x00, 0x01, 0x00, 0x04, 0x40}, 
++    {128, 8192000 , 64000, 0x01, 0x01, 0x00, 0x00, 0x80, 0x04, 0x40}, 
++    {64,  4096000 , 64000, 0x01, 0x41, 0x01, 0x00, 0x40, 0x02, 0x40}, 
++
++    /* 88.2k */
++    {512, 45158400, 88200, 0x01, 0x04, 0x00, 0x02, 0x00, 0x04, 0x40},
++    {384, 16934400, 88200, 0x01, 0x03, 0x00, 0x01, 0x80, 0x04, 0x40},
++    {256, 22579200, 88200, 0x01, 0x02, 0x00, 0x01, 0x00, 0x04, 0x40},
++    {128, 11289600, 88200, 0x01, 0x01, 0x00, 0x01, 0x80, 0x04, 0x40},
++    {64,  5644800 , 88200, 0x01, 0x41, 0x01, 0x00, 0x40, 0x02, 0x40},
++
++    /* 96k */
++    {384, 36864000, 96000, 0x01, 0x03, 0x00, 0x01, 0x80, 0x04, 0x40},
++    {256, 24576000, 96000, 0x01, 0x02, 0x00, 0x01, 0x00, 0x04, 0x40},
++    {128, 12288000, 96000, 0x01, 0x01, 0x00, 0x01, 0x80, 0x04, 0x40},
++    {64,  6144000 , 96000, 0x01, 0x41, 0x01, 0x00, 0x40, 0x02, 0x40},
++
++};
++static inline int get_coeff(int mclk, int rate)
++{
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(coeff_div); i++) {
++		if (coeff_div[i].rate == rate && coeff_div[i].mclk == mclk)
++			return i;
++	}
++	return -EINVAL;
++}
++
++
++static int 
++es8156_set_dai_fmt(struct snd_soc_dai *codec_dai, unsigned int fmt)
++{
++	struct snd_soc_component *codec = codec_dai->component;
++	struct es8156_priv *es8156 = snd_soc_component_get_drvdata(codec);
++
++	/* set master/slave audio interface */
++	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
++	case SND_SOC_DAIFMT_CBM_CFM:
++		printk( "%s ES8156 in master mode",__func__);
++		es8156->mastermode = 1;
++		snd_soc_component_update_bits(codec, ES8156_SCLK_MODE_REG02, 0x01, 0x01);
++		break;
++	case SND_SOC_DAIFMT_CBS_CFS:
++		printk( "%s ES8156 in slave mode",__func__);
++		es8156->mastermode = 0;
++		snd_soc_component_update_bits(codec, ES8156_SCLK_MODE_REG02, 0x01, 0x00);
++		break;
++	default:
++		return -EINVAL;
++	}
++	/* interface format */
++	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
++	case SND_SOC_DAIFMT_I2S:
++		snd_soc_component_update_bits(codec, ES8156_DAC_SDP_REG11, 0x07, 0x00);
++		break;
++	case SND_SOC_DAIFMT_RIGHT_J:
++		return -EINVAL;
++	case SND_SOC_DAIFMT_LEFT_J:
++		snd_soc_component_update_bits(codec, ES8156_DAC_SDP_REG11, 0x07, 0x01);
++		break;
++	case SND_SOC_DAIFMT_DSP_A:
++		snd_soc_component_update_bits(codec, ES8156_DAC_SDP_REG11, 0x07, 0x03);
++		break;
++	case SND_SOC_DAIFMT_DSP_B:
++		snd_soc_component_update_bits(codec, ES8156_DAC_SDP_REG11, 0x07, 0x07);
++		break;
++	default:
++		return -EINVAL;
++	}
++	/* clock inversion */
++	switch (fmt & SND_SOC_DAIFMT_INV_MASK) {
++	case SND_SOC_DAIFMT_NB_NF:
++		snd_soc_component_update_bits(codec, ES8156_SCLK_MODE_REG02, 0x01, 0x00);		
++		break;
++	case SND_SOC_DAIFMT_IB_IF:
++		snd_soc_component_update_bits(codec, ES8156_SCLK_MODE_REG02, 0x01, 0x01);	
++		break;
++	case SND_SOC_DAIFMT_IB_NF:
++		snd_soc_component_update_bits(codec, ES8156_SCLK_MODE_REG02, 0x01, 0x01);			
++		break;
++	case SND_SOC_DAIFMT_NB_IF:
++		snd_soc_component_update_bits(codec, ES8156_SCLK_MODE_REG02, 0x01, 0x00);			
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++static int es8156_set_dai_sysclk(struct snd_soc_dai *codec_dai, 
++		int clk_id, unsigned int freq, int dir)
++{
++	struct snd_soc_component *codec = codec_dai->component;
++	struct es8156_priv *es8156 = snd_soc_component_get_drvdata(codec);
++	
++
++	es8156->sysclk = freq;
++	printk("enter into %s, freq = %d", __func__, freq);
++	return 0;
++}
++
++static int es8156_pcm_hw_params(struct snd_pcm_substream *substream,
++		struct snd_pcm_hw_params *params, struct snd_soc_dai *dai)
++{
++	struct snd_soc_component *codec = dai->component;
++	struct es8156_priv *es8156 = snd_soc_component_get_drvdata(codec);
++	unsigned int regv;
++	int ret;
++	u8 coeff;
++	//unsigned int lrck_fs;
++
++	switch (params_format(params)) {
++	case SNDRV_PCM_FORMAT_S16_LE:
++		snd_soc_component_update_bits(codec, ES8156_DAC_SDP_REG11, 0x70, 0x30);
++		break;
++	case SNDRV_PCM_FORMAT_S20_3LE:
++		snd_soc_component_update_bits(codec, ES8156_DAC_SDP_REG11, 0x70, 0x10);
++		break;
++	case SNDRV_PCM_FORMAT_S24_LE:
++		snd_soc_component_update_bits(codec, ES8156_DAC_SDP_REG11, 0x70, 0x00);
++		break;
++	case SNDRV_PCM_FORMAT_S24_3LE:
++		snd_soc_component_update_bits(codec, ES8156_DAC_SDP_REG11, 0x70, 0x00);
++		break;		
++	case SNDRV_PCM_FORMAT_S32_LE:
++		snd_soc_component_update_bits(codec, ES8156_DAC_SDP_REG11, 0x70, 0x40);
++		break;
++	default:
++		return -EINVAL;
++	}
++	/* If the es8156->sysclk is a fixed value, for example 12.288M,
++	 * set es8156->sysclk = 12288000;
++	 * else if es8156->sysclk is some value times lrck, for example 128Fs,
++	 * set es8156->sysclk = 128 * params_rate(params);
++	 */
++	if (es8156->sysclk == 0) {
++		dev_err(codec->dev, "Codec driver requires MCLK to configure \
++				internal registers! define MCLK here.\n");
++		return -EINVAL;
++	}
++
++	coeff = get_coeff(es8156->sysclk, params_rate(params));
++	if (coeff < 0) {
++		pr_info("Unable to configure sample rate %dHz with %dHz MCLK",
++			params_rate(params), es8156->sysclk) ;
++		return coeff;
++	}
++
++	if (coeff >= 0){
++		ret = regmap_read(es8156->regmap, ES8156_MAINCLOCK_CTL_REG01, &regv);
++		regv &= 0x00;
++        regv += coeff_div[coeff].REG01;
++        switch (params_rate(params))
++        {
++        case 1536:
++            regv -= (0x03 * ES8156_EQ_ON);
++            break;
++        case 1024:
++            regv -= (0x02 * ES8156_EQ_ON);
++            break;
++    	case 512:
++            regv -= (0x01 * ES8156_EQ_ON);
++            break;
++        case 64:
++            break;
++        default:
++            regv += (0x40 * ES8156_EQ_ON);
++            break;
++        }
++        regmap_write(es8156->regmap, ES8156_MAINCLOCK_CTL_REG01, regv);
++
++        ret |= regmap_read(es8156->regmap, ES8156_MISC_CONTROL2_REG09, &regv);
++		regv &= 0xFD;
++        regv += coeff_div[coeff].DLL_ON << 1;
++        regmap_write(es8156->regmap, ES8156_MISC_CONTROL2_REG09, regv);
++
++        ret |= regmap_read(es8156->regmap, ES8156_LRCLK_DIV_H_REG03, &regv);
++		regv &= 0xF0;
++        regv += coeff_div[coeff].lrck_h << 0;
++        regmap_write(es8156->regmap, ES8156_LRCLK_DIV_H_REG03, regv);
++
++        ret |= regmap_read(es8156->regmap, ES8156_LRCLK_DIV_L_REG04, &regv);
++		regv &= 0x00;
++        regv += coeff_div[coeff].lrck_l << 0;
++        regmap_write(es8156->regmap, ES8156_LRCLK_DIV_L_REG04, regv);
++
++        ret |= regmap_read(es8156->regmap, ES8156_SCLK_DIV_REG05, &regv);
++		regv &= 0x80;
++        regv += coeff_div[coeff].bclk_div << 0;
++        regmap_write(es8156->regmap, ES8156_SCLK_DIV_REG05, regv);
++
++   		regmap_write(es8156->regmap, ES8156_SCLK_DIV_REG05, coeff_div[coeff].DAC_OSR);
++   
++   		ret |= regmap_read(es8156->regmap, ES8156_SCLK_MODE_REG02, &regv);
++		regv &= 0xFD;
++        regv += coeff_div[coeff].DoubleSpeed << 1;
++		es8156->doubelspeed = coeff_div[coeff].DoubleSpeed << 1;
++        regmap_write(es8156->regmap, ES8156_SCLK_MODE_REG02, regv); 
++	}
++
++	return 0;
++}
++
++static int es8156_mute(struct snd_soc_dai *dai, int mute)
++{
++	struct snd_soc_component *codec = dai->component;
++	struct es8156_priv *es8156 = snd_soc_component_get_drvdata(codec);
++
++	printk("enter into %s, mute = %d\n", __func__, mute);
++	es8156->muted = mute;
++	if (mute) {
++		es8156_enable_spk(es8156, false);
++		msleep(100);
++		snd_soc_component_update_bits(codec, ES8156_DAC_MUTE_REG13, 0x06, 0x06);
++
++	} else {
++		snd_soc_component_update_bits(codec, ES8156_DAC_MUTE_REG13, 0x06, 0x00);		
++		if (!es8156->hp_inserted)
++			es8156_enable_spk(es8156, true);
++	}
++
++	return 0;
++}
++
++
++static int es8156_set_bias_level(struct snd_soc_component *codec,
++		enum snd_soc_bias_level level)
++{
++	u8 coeff;
++	struct es8156_priv *es8156 = snd_soc_component_get_drvdata(codec);
++
++	printk("enter into %s, level = %d\n", __func__, level);
++	switch (level) {
++	case SND_SOC_BIAS_ON:
++		coeff = (es8156->mclk_src << 7) + (es8156->bclk_inv << 4) + es8156->doubelspeed;
++		snd_soc_component_write(codec, ES8156_SCLK_MODE_REG02, 
++				(es8156->mastermode == 1) ? (0x05 + coeff) : (0x04 + coeff));
++
++		snd_soc_component_update_bits(codec, ES8156_MISC_CONTROL1_REG07,
++				0x80,  ((es8156->bclk_inv == CLOCK_NORMAL) ? 0x00: 0x80));
++
++		snd_soc_component_write(codec, ES8156_ANALOG_SYS1_REG20,
++				((es8156->hp_mode == DACHP_ON) ? 0x16 : 0x2a));
++		snd_soc_component_write(codec, ES8156_ANALOG_SYS2_REG21,
++				((es8156->hp_mode == DACHP_ON) ? 0x3f : 0x3c));
++		snd_soc_component_write(codec, ES8156_ANALOG_SYS3_REG22,
++				((es8156->hp_mode == DACHP_ON) ? 0x0a : 0x02));
++		snd_soc_component_write(codec, ES8156_ANALOG_LP_REG24,
++				((es8156->hp_mode == DACHP_ON) ? 0x01 : 0x07));
++
++		snd_soc_component_write(codec, ES8156_ANALOG_SYS4_REG23, 
++				((es8156->vdda == ES8156_1V8) ? 0x30 : 0x00) +
++				((es8156->hp_mode == DACHP_ON) ? 0xca : 0x40));
++	
++		snd_soc_component_write(codec, ES8156_TIME_CONTROL1_REG0A, 0x01);
++		snd_soc_component_write(codec, ES8156_TIME_CONTROL2_REG0B, 0x01);
++		snd_soc_component_write(codec, ES8156_DAC_MUTE_REG13, 0x00);
++		snd_soc_component_write(codec, ES8156_VOLUME_CONTROL_REG14, 0xBF);
++		snd_soc_component_write(codec, ES8156_MAINCLOCK_CTL_REG01, 0x21);
++		snd_soc_component_write(codec, ES8156_P2S_CONTROL_REG0D, 0x14);
++		snd_soc_component_write(codec, ES8156_MISC_CONTROL3_REG18, 0x00);
++		snd_soc_component_write(codec, ES8156_CLOCK_ON_OFF_REG08, 0x3F);
++		snd_soc_component_write(codec, ES8156_RESET_REG00, 0x02);
++		snd_soc_component_write(codec, ES8156_RESET_REG00, 0x03);
++		snd_soc_component_write(codec, ES8156_ANALOG_SYS5_REG25, 0x20);
++		usleep_range(10000, 15000);
++		if(MCLK_LRCK == meanwhile)
++			snd_soc_component_update_bits(codec, ES8156_SCLK_MODE_REG02, 0x04, 0x00); 
++		else
++			snd_soc_component_update_bits(codec, ES8156_SCLK_MODE_REG02, 0x04, 0x04);
++		snd_soc_component_update_bits(codec, ES8156_RESET_REG00, 0x02, 0x00);
++		break;
++	case SND_SOC_BIAS_PREPARE:
++		break;
++	case SND_SOC_BIAS_STANDBY:
++		snd_soc_component_write(codec, ES8156_VOLUME_CONTROL_REG14, 0x00);
++		snd_soc_component_write(codec, ES8156_EQ_CONTROL1_REG19, 0x02);
++		snd_soc_component_write(codec, ES8156_ANALOG_SYS5_REG25, 0xA1);
++		snd_soc_component_write(codec, ES8156_MISC_CONTROL3_REG18, 0x01);
++		snd_soc_component_write(codec, ES8156_MISC_CONTROL2_REG09, 0x02);
++		snd_soc_component_write(codec, ES8156_MISC_CONTROL2_REG09, 0x01);
++		snd_soc_component_write(codec, ES8156_CLOCK_ON_OFF_REG08, 0x00);
++		if (SND_SOC_BIAS_OFF == snd_soc_component_get_bias_level(codec))
++			usleep_range(100000, 200000);
++		break;
++	case SND_SOC_BIAS_OFF:
++		/*
++		 * set idle_bias_off = true in soc_codec_dev_es8156 struct,
++		 * codec driver will go into SND_SOC_BIAS_OFF state while codec idle.
++		 * the off current will be lower than 15uA.
++		 * but a gentle pop noise when enter into SND_SOC_BIAS_OFF state.
++		 *
++		 * set idle_bias_off = false in soc_codec_dev_es8156 struct,
++		 * codec driver will hold in SND_SOC_BIAS_STANDBY state while codec idle.
++		 * the standby current will be lower than 300uA.
++		 * no pop noise when codec driver enter into SND_SOC_BIAS_STANDBY state
++		 * 
++		 */
++		snd_soc_component_write(codec,  ES8156_VOLUME_CONTROL_REG14, 0x00);
++		snd_soc_component_write(codec,  ES8156_EQ_CONTROL1_REG19, 0x02);
++		snd_soc_component_write(codec,  ES8156_ANALOG_SYS3_REG22, 0x02);
++		snd_soc_component_write(codec,  ES8156_ANALOG_SYS5_REG25, 0x81);
++		snd_soc_component_write(codec,  ES8156_MISC_CONTROL3_REG18, 0x01);
++		snd_soc_component_write(codec,  ES8156_MISC_CONTROL2_REG09, 0x02);		
++		snd_soc_component_write(codec,  ES8156_MISC_CONTROL2_REG09, 0x01); 
++		snd_soc_component_write(codec,  ES8156_CLOCK_ON_OFF_REG08, 0x00);
++		msleep(500);
++		snd_soc_component_write(codec,  ES8156_ANALOG_SYS5_REG25, 0x87); 
++		break;
++	}
++
++	return 0;
++}
++
++#define es8156_RATES SNDRV_PCM_RATE_8000_96000
++
++#define es8156_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE |\
++	SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S24_3LE | SNDRV_PCM_FMTBIT_S32_LE)
++
++static const struct snd_soc_dai_ops es8156_ops = {
++	.startup = NULL,
++	.hw_params = es8156_pcm_hw_params,
++	.set_fmt = es8156_set_dai_fmt,
++	.set_sysclk = es8156_set_dai_sysclk,
++	.digital_mute = es8156_mute,
++	.shutdown = NULL,
++};
++
++static struct snd_soc_dai_driver es8156_dai = {
++	.name = "ES8156 HiFi",
++	.playback = {
++		.stream_name = "Playback",
++		.channels_min = 1,
++		.channels_max = 2,
++		.rates = es8156_RATES,
++		.formats = es8156_FORMATS,
++	},
++	.ops = &es8156_ops,
++	.symmetric_rates = 1,
++};
++
++
++static int es8156_init_regs(struct snd_soc_component *codec)
++{
++	struct es8156_priv *es8156 = snd_soc_component_get_drvdata(codec);
++	
++	snd_soc_component_write(codec, ES8156_SCLK_MODE_REG02, 0x04 +
++			(es8156->mclk_src << 7) + (es8156->bclk_inv << 4));
++	return 0;
++}
++
++static int es8156_suspend(struct snd_soc_component *codec)
++{
++	printk("es8156_suspend\n");
++	es8156_set_bias_level(codec, SND_SOC_BIAS_OFF);
++	return 0;
++}
++
++static int es8156_resume(struct snd_soc_component *codec)
++{
++	printk("es8156_resume\n");
++	es8156_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
++	return 0;
++}
++
++#if 0
++static irqreturn_t es8156_irq_handler(int irq, void *data)
++{
++	struct es8156_priv *es8156 = data;
++
++	queue_delayed_work(system_power_efficient_wq, &es8156->work,
++			   msecs_to_jiffies(es8156->debounce_time));
++
++	return IRQ_HANDLED;
++}
++
++/*
++ * Call from rk_headset_irq_hook_adc.c
++ *
++ * Enable micbias for HOOK detection and disable external Amplifier
++ * when jack insertion.
++ */
++int es8156_headset_detect(int jack_insert)
++{
++	struct es8156_priv *es8156;
++	
++	if (!es8156_codec)
++		return -1;
++	
++	es8156 = snd_soc_component_get_drvdata(es8156_codec);
++	es8156->hp_inserted = jack_insert;
++
++	/*enable micbias and disable PA*/
++	if (jack_insert)
++		es8156_enable_spk(es8156, false);
++
++	return 0;
++}
++EXPORT_SYMBOL(es8156_headset_detect);
++static void hp_work(struct work_struct *work)
++{
++	struct es8156_priv *es8156;
++	int enable;
++
++	es8156 = container_of(work, struct es8156_priv, work.work);
++	enable = gpio_get_value(es8156->hp_det_gpio);
++	if (es8156->hp_det_invert)
++		enable = !enable;
++
++	es8156->hp_inserted = enable ? true : false;
++	if (!es8156->muted) {
++		if (es8156->hp_inserted)
++			es8156_enable_spk(es8156, false);
++		else
++			es8156_enable_spk(es8156, true);
++	}
++}
++#endif
++static int es8156_probe(struct snd_soc_component *codec)
++{
++	struct es8156_priv *es8156 = snd_soc_component_get_drvdata(codec);
++	int ret = 0;
++
++	printk("es8156_probe start\n");
++	es8156_codec = codec;
++	/*
++	 * default slave mode
++	 */ 
++	es8156->mastermode = 0;
++	/* get const properity value */
++	ret = device_property_read_u8(codec->dev, "analog-supply",
++			&es8156->vdda);
++	if (ret != 0) {
++		dev_dbg(codec->dev, "analog-supply return %d", ret);
++		es8156->vdda = ES8156_AVDD;
++	}
++	printk("analog-supply %x\n", es8156->vdda);	
++
++	ret = device_property_read_u8(codec->dev, "equalizer",
++			&es8156->eq);
++	if (ret != 0) {
++		dev_dbg(codec->dev, "equalizer return %d", ret);
++		es8156->eq = ES8156_EQ;
++	}
++	printk("Equalizer %x\n", es8156->eq);
++
++        ret = device_property_read_u8(codec->dev, "mclk-src",
++                        &es8156->mclk_src);
++        if (ret != 0) {
++                dev_dbg(codec->dev, "mclk-src return %d", ret);
++                es8156->mclk_src = MCLK_SOURCE;
++        }
++        printk("mclk-src %x\n", es8156->mclk_src);
++
++        ret = device_property_read_u8(codec->dev, "bclk-inv",
++                        &es8156->bclk_inv);
++        if (ret != 0) {
++                dev_dbg(codec->dev, "bclk-inv return %d", ret);
++                es8156->bclk_inv = BCLK_INVERT;
++        }
++        printk("bclk-inv %x\n", es8156->bclk_inv);
++
++        ret = device_property_read_u8(codec->dev, "hp-mode",
++                        &es8156->hp_mode);
++        if (ret != 0) {
++                dev_dbg(codec->dev, "hp-mode return %d", ret);
++                es8156->hp_mode = DACHPMode;
++        }
++        printk("hp-mode %x\n", es8156->hp_mode);
++
++	/* Enable the following code if there is no mclk.
++	 * a clock named "mclk" need to be defined in the dts (see sample dts)
++	 *
++	 * No need to enable the following code to get mclk if:
++	 * 1. sclk/bclk is used as mclk
++	 * 2. mclk is controlled by soc I2S
++	 */
++	
++	es8156->mclk = devm_clk_get(codec->dev, "mclk");
++	if (IS_ERR(es8156->mclk)) {
++		dev_err(codec->dev, "%s,unable to get mclk\n", __func__);
++		return PTR_ERR(es8156->mclk);
++	}
++	if (!es8156->mclk)
++		dev_err(codec->dev, "%s, assuming static mclk\n", __func__);
++	
++	ret = clk_prepare_enable(es8156->mclk);
++	if (ret) {
++		dev_err(codec->dev, "%s, unable to enable mclk\n", __func__);
++		return ret;
++	}
++	
++	es8156_reset(codec);
++	INIT_DELAYED_WORK(&es8156->init_work, init_work_events);
++	mutex_init(&es8156->init_mlock);
++	
++	es8156_init_regs(codec);
++	
++	return ret;
++}
++
++static bool es8156_reg_is_volatile(struct device *dev, unsigned int reg)
++{
++	return (reg == ES8156_CHIPID1_REGFD || reg == ES8156_CHIPID0_REGFE);
++}
++
++const struct regmap_config es8156_regmap_config = {
++	.reg_bits	= 8,
++	.val_bits	= 8,
++	.max_register	= 0xff,
++	.cache_type	= REGCACHE_NONE,
++	.volatile_reg	= es8156_reg_is_volatile,
++};
++
++static const struct snd_soc_component_driver soc_codec_dev_es8156 = {
++	.probe = es8156_probe,
++	.suspend = es8156_suspend,
++	.resume = es8156_resume,
++	.set_bias_level = es8156_set_bias_level,
++	.idle_bias_on = false,
++	.controls = es8156_snd_controls,
++	.num_controls = ARRAY_SIZE(es8156_snd_controls),
++	.dapm_widgets = es8156_dapm_widgets,
++	.num_dapm_widgets = ARRAY_SIZE(es8156_dapm_widgets),
++	.dapm_routes = es8156_dapm_routes,
++	.num_dapm_routes = ARRAY_SIZE(es8156_dapm_routes),
++};
++
++static int es8156_i2c_probe(struct i2c_client *i2c, const struct i2c_device_id *id)
++{
++	struct es8156_priv *es8156;
++	//int hp_irq;
++	//enum of_gpio_flags flags;
++	//struct device_node *np = i2c->dev.of_node;
++	int ret = -1;
++	unsigned int val;
++
++	printk("es8156_i2c_probe start\n");
++	
++	es8156 = devm_kzalloc(&i2c->dev, sizeof(*es8156), GFP_KERNEL);
++	if (!es8156)
++		return -ENOMEM;
++
++	es8156->debounce_time = 200;
++	es8156->hp_det_invert = 0;
++	es8156->hp_inserted = false;
++	es8156->muted = true;
++
++	es8156->regmap = devm_regmap_init_i2c(i2c, &es8156_regmap_config);
++	if (IS_ERR(es8156->regmap)) {
++		ret = PTR_ERR(es8156->regmap);
++		dev_err(&i2c->dev, "Failed to init regmap: %d\n", ret);
++		return ret;
++	}
++	
++	/* verify that we have an es8156 */
++	ret = regmap_read(es8156->regmap, ES8156_CHIPID1_REGFD, &val);
++	if (ret < 0) {
++		dev_err(&i2c->dev, "failed to read i2c at addr %X\n",
++		       i2c->addr);
++		return ret;
++	}
++	
++	/* The first ID should be 0x81 */
++	if (val != 0x81) {
++		dev_err(&i2c->dev, "device at addr %X is not an es8156\n",
++		       i2c->addr);
++		return -ENODEV;
++	}
++	
++	ret = regmap_read(es8156->regmap, ES8156_CHIPID0_REGFE, &val);
++	/* The NEXT ID should be 0x55 */
++	if (val != 0x55) {
++		dev_err(&i2c->dev, "device at addr %X is not an es8156\n",
++		       i2c->addr);
++		return -ENODEV;
++	}
++	i2c_set_clientdata(i2c, es8156);
++#if 0
++	es8156->spk_ctl_gpio = of_get_named_gpio_flags(np, "spk-con-gpio",
++			0, &flags);
++	if (es8156->spk_ctl_gpio < 0) {
++		dev_info(&i2c->dev, "Can not read property spk_ctl_gpio\n");
++		es8156->spk_ctl_gpio = INVALID_GPIO;
++	} else {
++		es8156->spk_active_level = !(flags & OF_GPIO_ACTIVE_LOW);
++		ret = devm_gpio_request_one(&i2c->dev, es8156->spk_ctl_gpio,
++				GPIOF_DIR_OUT, NULL);
++		if (ret) {
++			dev_err(&i2c->dev, "Failed to request spk_ctl_gpio\n");
++			return ret;
++		}
++		es8156_enable_spk(es8156, false);
++	}
++
++	es8156->hp_det_gpio = of_get_named_gpio_flags(np,
++			"hp-det-gpio",  0, &flags);
++	if (es8156->hp_det_gpio < 0) {
++		dev_info(&i2c->dev, "Can not read property hp_det_gpio\n");
++		es8156->hp_det_gpio = INVALID_GPIO;
++	} else {
++		INIT_DELAYED_WORK(&es8156->work, hp_work);
++		es8156->hp_det_invert = !!(flags & OF_GPIO_ACTIVE_LOW);
++		ret = devm_gpio_request_one(&i2c->dev, es8156->hp_det_gpio,
++				GPIOF_IN, "hp det");
++		if (ret < 0)
++			return ret;
++		
++		hp_irq = gpio_to_irq(es8156->hp_det_gpio);
++		ret = devm_request_threaded_irq(&i2c->dev, hp_irq, NULL,
++				es8156_irq_handler, IRQF_TRIGGER_FALLING |
++				IRQF_TRIGGER_RISING | IRQF_ONESHOT,
++				"es8156_interrupt", es8156);
++		if (ret < 0) {
++			dev_err(&i2c->dev, "request_irq failed: %d\n", ret);
++			return ret;
++		}
++
++		schedule_delayed_work(&es8156->work,
++				msecs_to_jiffies(es8156->debounce_time));
++	}
++#endif	
++	ret = snd_soc_register_component(&i2c->dev,
++			&soc_codec_dev_es8156, &es8156_dai, 1);	
++	
++	return ret;
++}
++
++static  int es8156_i2c_remove(struct i2c_client *client)
++{
++	snd_soc_unregister_component(&client->dev);
++	return 0;
++}
++
++static void es8156_i2c_shutdown(struct i2c_client *client)
++{
++	struct es8156_priv *es8156 = i2c_get_clientdata(client);
++
++	if (es8156_codec != NULL) {
++		es8156_enable_spk(es8156, false);
++		msleep(20);
++		es8156_set_bias_level(es8156_codec, SND_SOC_BIAS_OFF);
++	}
++}
++
++static const struct i2c_device_id es8156_i2c_id[] = {
++	{"es8156", 0},
++	{ }
++};
++MODULE_DEVICE_TABLE(i2c, es8156_i2c_id);
++
++static const struct of_device_id es8156_of_match[] = {
++	{ .compatible = "everest,es8156", },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, es8156_of_match);
++
++static struct i2c_driver es8156_i2c_driver = {
++	.driver = {
++		.name = "es8156",
++		.of_match_table = es8156_of_match,
++	},
++	.probe    = es8156_i2c_probe,
++	.remove   = es8156_i2c_remove,
++	.shutdown = es8156_i2c_shutdown,
++	.id_table = es8156_i2c_id,
++};
++
++static int __init es8156_modinit(void)
++{
++	int ret;
++	printk("%s enter\n", __func__);
++	ret = i2c_add_driver(&es8156_i2c_driver);
++	if(ret != 0)
++		printk("Failed to register es8156 i2c driver\n");
++	return ret;
++}
++late_initcall(es8156_modinit);
++
++MODULE_DESCRIPTION("ASoC es8156 driver");
++MODULE_AUTHOR("Will <pengxiaoxin@everset-semi.com>");
++MODULE_LICENSE("GPL");
+diff --git a/sound/soc/codecs/es8156.h b/sound/soc/codecs/es8156.h
+new file mode 100644
+index 000000000..cb2fea428
+--- /dev/null
++++ b/sound/soc/codecs/es8156.h
+@@ -0,0 +1,134 @@
++/*
++ * Copyright Everest Semiconductor Co.,Ltd *
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ *
++ */
++
++#ifndef _ES8156_H
++#define _ES8156_H
++
++/* ES8156 register space */
++/*
++* RESET Control
++*/
++#define ES8156_RESET_REG00		0x00
++/*
++* Clock Managerment
++*/
++#define ES8156_MAINCLOCK_CTL_REG01	0x01
++#define ES8156_SCLK_MODE_REG02		0x02
++#define ES8156_LRCLK_DIV_H_REG03	0x03
++#define ES8156_LRCLK_DIV_L_REG04	0x04
++#define ES8156_SCLK_DIV_REG05		0x05
++#define ES8156_NFS_CONFIG_REG06		0x06
++#define ES8156_MISC_CONTROL1_REG07	0x07
++#define ES8156_CLOCK_ON_OFF_REG08	0x08
++#define ES8156_MISC_CONTROL2_REG09	0x09
++#define ES8156_TIME_CONTROL1_REG0A	0x0a
++#define ES8156_TIME_CONTROL2_REG0B	0x0b
++/*
++* System Control
++*/
++#define ES8156_CHIP_STATUS_REG0C	0x0c
++#define ES8156_P2S_CONTROL_REG0D	0x0d
++#define ES8156_DAC_OSR_COUNTER_REG10	0x10
++/*
++* SDP Control
++*/
++#define ES8156_DAC_SDP_REG11		0x11
++#define ES8156_AUTOMUTE_SET_REG12	0x12
++#define ES8156_DAC_MUTE_REG13		0x13
++#define ES8156_VOLUME_CONTROL_REG14	0x14
++
++/*
++* ALC Control
++*/
++#define ES8156_ALC_CONFIG1_REG15	0x15
++#define ES8156_ALC_CONFIG2_REG16	0x16
++#define ES8156_ALC_CONFIG3_REG17	0x17
++#define ES8156_MISC_CONTROL3_REG18	0x18
++#define ES8156_EQ_CONTROL1_REG19	0x19
++#define ES8156_EQ_CONTROL2_REG1A	0x1a
++/*
++* Analog System Control
++*/
++#define ES8156_ANALOG_SYS1_REG20	0x20
++#define ES8156_ANALOG_SYS2_REG21	0x21
++#define ES8156_ANALOG_SYS3_REG22	0x22
++#define ES8156_ANALOG_SYS4_REG23	0x23
++#define ES8156_ANALOG_LP_REG24		0x24
++#define ES8156_ANALOG_SYS5_REG25	0x25
++/*
++* Chip Information
++*/
++#define ES8156_I2C_PAGESEL_REGFC	0xFC
++#define ES8156_CHIPID1_REGFD		0xFD
++#define ES8156_CHIPID0_REGFE		0xFE
++#define ES8156_CHIP_VERSION_REGFF	0xFF
++
++/* ES8156 VMID SELECT */
++enum vmidlow {
++        VMIDLEVEL0,
++        VMIDLEVEL1,
++        VMIDLEVEL2,
++        VMIDLEVEL3,
++};
++
++/* ES8156_MAINCLOCK_CTL_REG01 */
++enum es8156_mclk_multp {
++	MULTIPLY_BY_1,
++	MULTIPLY_BY_2,
++	MULTIPLY_BY_4,
++	MULTIPLY_BY_8,
++};
++
++enum es8156_osr {
++	ES8156_64_OSR,
++	ES8156_128_OSR,
++};
++
++#define ES8156_EQ_ON	0
++
++/* The VMIDLEVEL is different for 1.8V AVDD */
++#define ES8156_3V3	0
++#define ES8156_1V8	1
++#define ES8156_AVDD	ES8156_3V3
++
++/*Select output*/
++#define Lineout		0
++#define Headphoneout	1
++#define ES8156_OUT	Lineout
++
++/*HPMode open to improve headphone driving capability*/
++#define DACHP_OFF	0
++#define DACHP_ON	1
++#define DACHPMode	DACHP_ON
++
++/*MCLK and BCLK invert*/
++#define CLOCK_INVERT	1
++#define CLOCK_NORMAL	0
++#define MCLK_INVERT	CLOCK_NORMAL
++#define BCLK_INVERT	CLOCK_NORMAL
++
++/*select MCLK source from MCLK or SCLK*/
++#define FROM_SCLK	1
++#define FROM_MCLK 	0
++#define MCLK_SOURCE	FROM_MCLK
++
++/*EQ*/
++#define EQ_OFF		0
++#define EQ_3BAND	1
++#define EQ_7BAND	2
++#define ES8156_EQ	EQ_OFF
++
++/*MCLK and LRCK stop at the same time, then set to meanwhile; 
++MCLK and LRCK do not stop at the same time, then set to different*/
++#define different 0
++#define meanwhile 1
++#define MCLK_LRCK   different
++
++#endif
++
+diff --git a/sound/soc/codecs/es8311.c b/sound/soc/codecs/es8311.c
+new file mode 100755
+index 000000000..72c18088a
+--- /dev/null
++++ b/sound/soc/codecs/es8311.c
+@@ -0,0 +1,1340 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * es8311.c  --  ES8311/ES8312 ALSA SoC Audio Codec
++ *
++ * Copyright (C) 2018 Everest Semiconductor Co., Ltd
++ *
++ * Authors:  David Yang(yangxiaohua@everest-semi.com)
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#include <linux/clk.h>
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/delay.h>
++#include <linux/i2c.h>
++#include <linux/regmap.h>
++#include <sound/core.h>
++#include <sound/pcm.h>
++#include <sound/pcm_params.h>
++#include <sound/tlv.h>
++#include <sound/soc.h>
++
++#include "es8311.h"
++#ifndef CONFIG_OF
++#define CONFIG_OF
++#endif
++
++/* component private data */
++
++struct	es8311_private {
++	struct snd_soc_component *component;
++	struct regmap *regmap;
++	struct clk *mclk;
++	unsigned int mclk_rate;
++	int mastermode;
++	bool sclkinv;
++	bool mclkinv;
++	bool dmic_enable;
++	unsigned int mclk_src;
++	enum snd_soc_bias_level bias_level;
++};
++
++struct es8311_private *es8311_data;
++struct snd_soc_component *es8311_component;
++
++static bool es8311_volatile_register(struct device *dev,
++			unsigned int reg)
++{
++	if ((reg  <= 0xff))
++		return true;
++	else
++		return false;
++	}
++
++static bool es8311_readable_register(struct device *dev,
++			unsigned int reg)
++{
++	if ((reg  <= 0xff))
++		return true;
++	else
++		return false;
++	}
++
++static bool es8311_writable_register(struct device *dev,
++			unsigned int reg)
++{
++	if ((reg  <= 0xff))
++		return true;
++	else
++		return false;
++}
++
++static const DECLARE_TLV_DB_SCALE(vdac_tlv, -9550, 50, 1);
++static const DECLARE_TLV_DB_SCALE(vadc_tlv, -9550, 50, 1);
++static const DECLARE_TLV_DB_SCALE(mic_pga_tlv, 0, 300, 1);
++static const DECLARE_TLV_DB_SCALE(adc_scale_tlv, 0, 600, 0);
++static const DECLARE_TLV_DB_SCALE(alc_winsize_tlv, 0, 25, 0);
++static const DECLARE_TLV_DB_SCALE(alc_maxlevel_tlv, -3600, 200, 0);
++static const DECLARE_TLV_DB_SCALE(alc_minlevel_tlv, -3600, 200, 0);
++static const DECLARE_TLV_DB_SCALE(alc_noisegate_tlv, -9600, 600, 0);
++static const DECLARE_TLV_DB_SCALE(alc_noisegate_winsize_tlv, 2048, 2048, 0);
++static const DECLARE_TLV_DB_SCALE(alc_automute_gain_tlv, 0, -400, 0);
++static const DECLARE_TLV_DB_SCALE(adc_ramprate_tlv, 0, 25, 0);
++
++static const char * const dmic_type_txt[] = {
++	"dmic at high level",
++	"dmic at low level"
++};
++static const struct soc_enum dmic_type =
++SOC_ENUM_SINGLE(ES8311_ADC_REG15, 0, 2, dmic_type_txt);
++
++static const char * const automute_type_txt[] = {
++	"automute disabled",
++	"automute enable"
++};
++static const struct soc_enum alc_automute_type =
++SOC_ENUM_SINGLE(ES8311_ADC_REG18, 6, 2, automute_type_txt);
++
++static const char * const dacdsm_mute_type_txt[] = {
++	"mute to 8",
++	"mute to 7/9"
++};
++static const struct soc_enum dacdsm_mute_type =
++SOC_ENUM_SINGLE(ES8311_DAC_REG31, 7, 2, dacdsm_mute_type_txt);
++
++static const char * const aec_type_txt[] = {
++	"adc left, adc right",
++	"adc left, null right",
++	"null left, adc right",
++	"null left, null right",
++	"dac left, adc right",
++	"adc left, dac right",
++	"dac left, dac right",
++	"N/A"
++};
++static const struct soc_enum aec_type =
++SOC_ENUM_SINGLE(ES8311_GPIO_REG44, 4, 7, aec_type_txt);
++
++static const char * const adc2dac_sel_txt[] = {
++	"disable",
++	"adc data to dac",
++};
++static const struct soc_enum adc2dac_sel =
++SOC_ENUM_SINGLE(ES8311_GPIO_REG44, 7, 2, adc2dac_sel_txt);
++
++static const char * const mclk_sel_txt[] = {
++	"from mclk pin",
++	"from bclk",
++};
++static const struct soc_enum mclk_src =
++SOC_ENUM_SINGLE(ES8311_CLK_MANAGER_REG01, 7, 2, mclk_sel_txt);
++
++/*
++ * es8311 Controls
++ */
++static const struct snd_kcontrol_new es8311_snd_controls[] = {
++	SOC_SINGLE_TLV("MIC PGA GAIN", ES8311_SYSTEM_REG14,
++			0, 10, 0, mic_pga_tlv),
++	SOC_SINGLE_TLV("ADC SCALE", ES8311_ADC_REG16,
++			0, 7, 0, adc_scale_tlv),
++	SOC_ENUM("DMIC TYPE", dmic_type),
++	SOC_SINGLE_TLV("ADC RAMP RATE", ES8311_ADC_REG15,
++			4, 15, 0, adc_ramprate_tlv),
++	SOC_SINGLE("ADC SDP MUTE", ES8311_SDPOUT_REG0A, 6, 1, 0),
++	SOC_SINGLE("ADC INVERTED", ES8311_ADC_REG16, 4, 1, 0),
++	SOC_SINGLE("ADC SYNC", ES8311_ADC_REG16, 5, 1, 1),
++	SOC_SINGLE("ADC RAM CLR", ES8311_ADC_REG16, 3, 1, 0),
++	SOC_SINGLE_TLV("ADC VOLUME", ES8311_ADC_REG17,
++			0, 255, 0, vadc_tlv),
++	SOC_SINGLE("ALC ENABLE", ES8311_ADC_REG18, 7, 1, 0),
++	SOC_ENUM("ALC AUTOMUTE TYPE", alc_automute_type),
++	SOC_SINGLE_TLV("ALC WIN SIZE", ES8311_ADC_REG18,
++			0, 15, 0, alc_winsize_tlv),
++	SOC_SINGLE_TLV("ALC MAX LEVEL", ES8311_ADC_REG19,
++			4, 15, 0, alc_maxlevel_tlv),
++	SOC_SINGLE_TLV("ALC MIN LEVEL", ES8311_ADC_REG19,
++			0, 15, 0, alc_minlevel_tlv),
++	SOC_SINGLE_TLV("ALC AUTOMUTE WINSIZE", ES8311_ADC_REG1A,
++			4, 15, 0, alc_noisegate_winsize_tlv),
++	SOC_SINGLE_TLV("ALC AUTOMUTE GATE THRESHOLD", ES8311_ADC_REG1A,
++			0, 15, 0, alc_noisegate_tlv),
++	SOC_SINGLE_TLV("ALC AUTOMUTE VOLUME", ES8311_ADC_REG1B,
++			5, 7, 0, alc_automute_gain_tlv),
++	SOC_SINGLE("ADC FS MODE", ES8311_CLK_MANAGER_REG03, 6, 1, 0),
++	SOC_SINGLE("DAC SDP MUTE", ES8311_SDPIN_REG09, 6, 1, 0),
++	SOC_SINGLE("DAC DEM  MUTE", ES8311_DAC_REG31, 5, 1, 0),
++	SOC_SINGLE("DAC INVERT", ES8311_DAC_REG31, 4, 1, 0),
++	SOC_SINGLE("DAC RAM CLR", ES8311_DAC_REG31, 3, 1, 0),
++	SOC_ENUM("DAC DSM MUTE", dacdsm_mute_type),
++	SOC_SINGLE("DAC OFFSET", ES8311_DAC_REG33, 0, 255, 0),
++	SOC_SINGLE_TLV("DAC VOLUME", ES8311_DAC_REG32,
++			0, 255, 0, vdac_tlv),
++	SOC_SINGLE("DRC ENABLE", ES8311_DAC_REG34, 7, 1, 0),
++	SOC_SINGLE_TLV("DRC WIN SIZE",	ES8311_DAC_REG34,
++			0, 15, 0, alc_winsize_tlv),
++	SOC_SINGLE_TLV("DRC MAX LEVEL",	ES8311_DAC_REG35,
++			4, 15, 0, alc_maxlevel_tlv),
++	SOC_SINGLE_TLV("DRC MIN LEVEL",	ES8311_DAC_REG35,
++			0, 15, 0, alc_minlevel_tlv),
++	SOC_SINGLE_TLV("DAC RAMP RATE",	ES8311_DAC_REG37,
++			4, 15, 0, adc_ramprate_tlv),
++	SOC_ENUM("AEC MODE", aec_type),
++	SOC_ENUM("ADC DATA TO DAC TEST MODE", adc2dac_sel),
++	SOC_SINGLE("MCLK INVERT", ES8311_CLK_MANAGER_REG01, 6, 1, 0),
++	SOC_SINGLE("BCLK INVERT", ES8311_CLK_MANAGER_REG06, 5, 1, 0),
++	SOC_ENUM("MCLK SOURCE", mclk_src),
++};
++
++/*
++ * DAPM Controls
++ */
++static const char * const es8311_dmic_mux_txt[] = {
++	"DMIC DISABLE",
++	"DMIC ENABLE"
++};
++static const unsigned int es8311_dmic_mux_values[] = {
++	0, 1
++};
++static const struct soc_enum es8311_dmic_mux_enum =
++	SOC_VALUE_ENUM_SINGLE(ES8311_SYSTEM_REG14, 6, 1,
++			ARRAY_SIZE(es8311_dmic_mux_txt),
++			es8311_dmic_mux_txt,
++			es8311_dmic_mux_values);
++static const struct snd_kcontrol_new es8311_dmic_mux_controls =
++	SOC_DAPM_ENUM("DMIC ROUTE", es8311_dmic_mux_enum);
++static const char * const es8311_adc_sdp_mux_txt[] = {
++	"FROM EQUALIZER",
++	"FROM ADC OUT",
++};
++static const unsigned int es8311_adc_sdp_mux_values[] = {
++	0, 1
++};
++static const struct soc_enum es8311_adc_sdp_mux_enum =
++	SOC_VALUE_ENUM_SINGLE(ES8311_ADC_REG1C, 6, 1,
++			ARRAY_SIZE(es8311_adc_sdp_mux_txt),
++			es8311_adc_sdp_mux_txt,
++			es8311_adc_sdp_mux_values);
++static const struct snd_kcontrol_new es8311_adc_sdp_mux_controls =
++	SOC_DAPM_ENUM("ADC SDP ROUTE", es8311_adc_sdp_mux_enum);
++
++/*
++ * DAC data  soure
++ */
++static const char * const es8311_dac_data_mux_txt[] = {
++	"SELECT SDP LEFT DATA",
++	"SELECT SDP RIGHT DATA",
++};
++static const unsigned int  es8311_dac_data_mux_values[] = {
++	0, 1
++};
++static const struct soc_enum  es8311_dac_data_mux_enum =
++	SOC_VALUE_ENUM_SINGLE(ES8311_SDPIN_REG09, 7, 1,
++			ARRAY_SIZE(es8311_dac_data_mux_txt),
++			es8311_dac_data_mux_txt,
++			es8311_dac_data_mux_values);
++static const struct snd_kcontrol_new  es8311_dac_data_mux_controls =
++	SOC_DAPM_ENUM("DAC SDP ROUTE", es8311_dac_data_mux_enum);
++
++static const struct snd_soc_dapm_widget es8311_dapm_widgets[] = {
++	/* Input*/
++	SND_SOC_DAPM_INPUT("DMIC"),
++	SND_SOC_DAPM_INPUT("AMIC"),
++
++	SND_SOC_DAPM_PGA("INPUT PGA", ES8311_SYSTEM_REG0E,
++			6, 1, NULL, 0),
++	/* ADCs */
++	SND_SOC_DAPM_ADC("MONO ADC", NULL, ES8311_SYSTEM_REG0E, 5, 1),
++	/* Dmic MUX */
++	SND_SOC_DAPM_MUX("DMIC MUX", SND_SOC_NOPM, 0, 0,
++			&es8311_dmic_mux_controls),
++	/* sdp MUX */
++	SND_SOC_DAPM_MUX("SDP OUT MUX", SND_SOC_NOPM, 0, 0,
++			&es8311_adc_sdp_mux_controls),
++	/* Digital Interface */
++	SND_SOC_DAPM_AIF_OUT("I2S OUT", "I2S1 Capture",  1,
++			SND_SOC_NOPM, 0, 0),
++	/* Render path	*/
++	SND_SOC_DAPM_AIF_IN("I2S IN", "I2S1 Playback", 0,
++			SND_SOC_NOPM, 0, 0),
++	/*DACs SDP DATA SRC MUX */
++	SND_SOC_DAPM_MUX("DAC SDP SRC MUX", ES8311_SDPIN_REG09, 7, 2,
++			&es8311_dac_data_mux_controls),
++	SND_SOC_DAPM_DAC("MONO DAC", NULL, SND_SOC_NOPM, 0, 0),
++	/* Output Lines */
++	SND_SOC_DAPM_OUTPUT("DIFFERENTIAL OUT"),
++
++};
++
++
++static const struct snd_soc_dapm_route es8311_dapm_routes[] = {
++	/* record route map */
++	{"INPUT PGA", NULL, "AMIC"},
++	{"MONO ADC", NULL, "INPUT PGA"},
++	{"DMIC MUX", "DMIC DISABLE", "MONO ADC"},
++	{"DMIC MUX", "DMIC ENABLE", "DMIC"},
++	{"SDP OUT MUX", "FROM ADC OUT", "DMIC MUX"},
++	{"SDP OUT MUX", "FROM EQUALIZER", "DMIC MUX"},
++	{"I2S OUT", NULL, "SDP OUT MUX"},
++	/* playback route map */
++	{"DAC SDP SRC MUX", "SELECT SDP LEFT DATA", "I2S IN"},
++	{"DAC SDP SRC MUX", "SELECT SDP RIGHT DATA", "I2S IN"},
++	{"MONO DAC", NULL, "DAC SDP SRC MUX"},
++	{"DIFFERENTIAL OUT", NULL, "MONO DAC"},
++};
++
++struct _coeff_div {
++	u32 mclk;	/* mclk frequency */
++	u32 rate;	/* sample rate */
++	u8 prediv;	/* the pre divider with range from 1 to 8 */
++	u8 premulti;	/* the pre multiplier with x1, x2, x4 and x8 selection */
++	u8 adcdiv;	/* adcclk divider */
++	u8 dacdiv;	/* dacclk divider */
++	u8 fsmode;	/* double speed or single speed, =0, ss, =1, ds */
++	u8 lrck_h;	/* adclrck divider and daclrck divider */
++	u8 lrck_l;
++	u8 bclkdiv;	/* sclk divider */
++	u8 adcosr;	/* adc osr */
++	u8 dacosr;	/* dac osr */
++	u8 adcscale;
++};
++
++
++/* component hifi mclk clock divider coefficients */
++static const struct _coeff_div coeff_div[] = {
++	//mclk     rate   prediv  mult  adcdiv dacdiv fsmode lrch  lrcl  bckdiv osr  adcscale
++	/* 8k */
++	{12288000, 8000, 0x06, 0x01, 0x01, 0x01, 0x00, 0x05, 0xff, 0x04, 0x10, 0x20, 0x04},	//1536
++	{18432000, 8000, 0x03, 0x01, 0x03, 0x03, 0x00, 0x08, 0xff, 0x18, 0x10, 0x20, 0x04},	//2304
++	{16384000, 8000, 0x08, 0x01, 0x01, 0x01, 0x00, 0x07, 0xff, 0x04, 0x10, 0x20, 0x04},	//2048
++	{8192000, 8000, 0x04, 0x01, 0x01, 0x01, 0x00, 0x03, 0xff, 0x04, 0x10, 0x20, 0x04},	//1024
++	{6144000, 8000, 0x03, 0x01, 0x01, 0x01, 0x00, 0x02, 0xff, 0x04, 0x10, 0x20, 0x04},	//768
++	{4096000, 8000, 0x02, 0x01, 0x01, 0x01, 0x00, 0x01, 0xff, 0x04, 0x10, 0x20, 0x04},	//512
++	{3072000, 8000, 0x03, 0x02, 0x01, 0x01, 0x00, 0x01, 0x7f, 0x04, 0x10, 0x20, 0x04},	//384
++	{2048000, 8000, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0xff, 0x04, 0x10, 0x20, 0x04},	//256
++	{1536000, 8000, 0x01, 0x04, 0x03, 0x03, 0x00, 0x00, 0xbf, 0x04, 0x10, 0x20, 0x04},	//192
++	{1024000, 8000, 0x01, 0x02, 0x01, 0x01, 0x00, 0x00, 0x7f, 0x04, 0x10, 0x20, 0x04},	//128
++	{12000000, 8000, 0x05, 0x04, 0x03, 0x03, 0x00, 0x05, 0xDB, 0x04, 0x19, 0x19, 0x01},	//1500
++	/* 11.025k */
++	{11289600, 11025, 0x04, 0x01, 0x01, 0x01, 0x00, 0x03, 0xff, 0x04, 0x10, 0x20, 0x04},	//1024
++	{5644800, 11025, 0x02, 0x01, 0x01, 0x01, 0x00, 0x01, 0xff, 0x04, 0x10, 0x20, 0x04},	//512
++	{2822400, 11025, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0xff, 0x04, 0x10, 0x20, 0x04},	//256
++	{1411200, 11025, 0x01, 0x02, 0x01, 0x01, 0x00, 0x00, 0x7f, 0x04, 0x10, 0x20, 0x04},	//128
++
++	/* 12k */
++	{12288000, 12000, 0x04, 0x01, 0x01, 0x01, 0x00, 0x03, 0xff, 0x04, 0x10, 0x20, 0x04},	//1024
++	{6144000, 12000, 0x02, 0x01, 0x01, 0x01, 0x00, 0x01, 0xff, 0x04, 0x10, 0x20, 0x04},	//512
++	{3072000, 12000, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0xff, 0x04, 0x10, 0x20, 0x04},	//256
++	{1536000, 12000, 0x01, 0x02, 0x01, 0x01, 0x00, 0x00, 0x7f, 0x04, 0x10, 0x20, 0x04},	//128
++
++	/* 16k */
++	{24576000, 16000, 0x06, 0x01, 0x01, 0x01, 0x00, 0x05, 0xff, 0x04, 0x10, 0x20, 0x04},	//1536
++	{12288000, 16000, 0x03, 0x01, 0x01, 0x01, 0x00, 0x02, 0xff, 0x04, 0x10, 0x20, 0x04},	//768
++	{18432000, 16000, 0x03, 0x02, 0x03, 0x03, 0x00, 0x04, 0x7f, 0x0c, 0x10, 0x20, 0x04},	//1152
++	{16384000, 16000, 0x04, 0x01, 0x01, 0x01, 0x00, 0x03, 0xff, 0x04, 0x10, 0x20, 0x04},	//1024
++	{8192000, 16000, 0x02, 0x01, 0x01, 0x01, 0x00, 0x01, 0xff, 0x04, 0x10, 0x20, 0x04},	//512
++	{6144000, 16000, 0x03, 0x02, 0x01, 0x01, 0x00, 0x01, 0x7f, 0x04, 0x10, 0x20, 0x04},	//384
++	{4096000, 16000, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0xff, 0x04, 0x10, 0x20, 0x04},	//256
++	{3072000, 16000, 0x03, 0x04, 0x01, 0x01, 0x00, 0x00, 0xbf, 0x04, 0x10, 0x20, 0x04},	//192
++	{2048000, 16000, 0x01, 0x02, 0x01, 0x01, 0x00, 0x00, 0x7f, 0x04, 0x10, 0x20, 0x04},	//128
++	{1536000, 16000, 0x01, 0x08, 0x03, 0x03, 0x00, 0x00, 0x5f, 0x02, 0x10, 0x20, 0x04},	//96
++	{1024000, 16000, 0x01, 0x04, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x02, 0x10, 0x20, 0x04},	//64
++	{12000000, 16000, 0x05, 0x08, 0x03, 0x03, 0x00, 0x02, 0xED, 0x04, 0x19, 0x19, 0x01},	//750
++
++	/* 22.05k */
++	{11289600, 22050, 0x02, 0x01, 0x01, 0x01, 0x00, 0x01, 0xff, 0x04, 0x10, 0x20, 0x04},	//512
++	{5644800, 22050, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0xff, 0x04, 0x10, 0x20, 0x04},	//256
++	{2822400, 22050, 0x01, 0x02, 0x01, 0x01, 0x00, 0x00, 0x7f, 0x04, 0x10, 0x20, 0x04},	//128
++	{1411200, 22050, 0x01, 0x04, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x02, 0x10, 0x20, 0x04},	//64
++
++	/* 24k */
++	{24576000, 24000, 0x04, 0x01, 0x01, 0x01, 0x00, 0x03, 0xff, 0x04, 0x10, 0x20, 0x04},	//1024
++	{12288000, 24000, 0x02, 0x01, 0x01, 0x01, 0x00, 0x01, 0xff, 0x04, 0x10, 0x20, 0x04},	//512
++	{18432000, 24000, 0x03, 0x01, 0x01, 0x01, 0x00, 0x02, 0xff, 0x04, 0x10, 0x20, 0x04},	//768
++	{6144000, 24000, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0xff, 0x04, 0x10, 0x20, 0x04},	//256
++	{3072000, 24000, 0x01, 0x02, 0x01, 0x01, 0x00, 0x00, 0x7f, 0x04, 0x10, 0x20, 0x04},	//128
++	{1536000, 24000, 0x01, 0x04, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x02, 0x10, 0x20, 0x04},	//64
++	{12000000, 24000, 0x05, 0x04, 0x01, 0x01, 0x00, 0x01, 0xF3, 0x04, 0x19, 0x19, 0x01},	//500
++
++	/* 32k */
++	{24576000, 32000, 0x03, 0x01, 0x01, 0x01, 0x00, 0x02, 0xff, 0x04, 0x10, 0x10, 0x04},	//768
++	{12288000, 32000, 0x03, 0x02, 0x01, 0x01, 0x00, 0x01, 0x7f, 0x04, 0x10, 0x10, 0x04},	//384
++	{18432000, 32000, 0x03, 0x04, 0x03, 0x03, 0x00, 0x02, 0x3f, 0x0c, 0x10, 0x10, 0x04},	//576
++	{16384000, 32000, 0x02, 0x01, 0x01, 0x01, 0x00, 0x01, 0xff, 0x04, 0x10, 0x10, 0x04},	//512
++	{8192000, 32000, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0xff, 0x04, 0x10, 0x10, 0x04},	//256
++	{6144000, 32000, 0x03, 0x04, 0x01, 0x01, 0x00, 0x00, 0xbf, 0x04, 0x10, 0x10, 0x04},	//192
++	{4096000, 32000, 0x01, 0x02, 0x01, 0x01, 0x00, 0x00, 0x7f, 0x04, 0x10, 0x10, 0x04},	//128
++	{3072000, 32000, 0x03, 0x08, 0x01, 0x01, 0x00, 0x00, 0x5f, 0x02, 0x10, 0x10, 0x04},	//96
++	{2048000, 32000, 0x01, 0x04, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x02, 0x10, 0x10, 0x04},	//64
++	{1536000, 32000, 0x01, 0x08, 0x03, 0x03, 0x01, 0x00, 0x2f, 0x02, 0x10, 0x10, 0x04},	//48
++	{1024000, 32000, 0x01, 0x08, 0x01, 0x01, 0x00, 0x00, 0x1f, 0x02, 0x10, 0x10, 0x04},	//32
++
++	/* 44.1k */
++	{22579200, 44100, 0x02, 0x01, 0x01, 0x01, 0x00, 0x01, 0xff, 0x04, 0x10, 0x10, 0x04},    //512
++	{11289600, 44100, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0xff, 0x04, 0x10, 0x10, 0x04},	//256
++	{5644800, 44100, 0x01, 0x02, 0x01, 0x01, 0x00, 0x00, 0x7f, 0x04, 0x10, 0x10, 0x04},	//128
++	{2822400, 44100, 0x01, 0x04, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x02, 0x10, 0x10, 0x04},	//64
++	{1411200, 44100, 0x01, 0x08, 0x01, 0x01, 0x00, 0x00, 0x1f, 0x02, 0x10, 0x10, 0x04},	//32
++
++	/* 48k */
++	{24576000, 48000, 0x02, 0x01, 0x01, 0x01, 0x00, 0x01, 0xff, 0x04, 0x10, 0x10, 0x04},    //512
++	{12288000, 48000, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0xff, 0x04, 0x10, 0x10, 0x04},	//256
++	{18432000, 48000, 0x03, 0x02, 0x01, 0x01, 0x00, 0x01, 0x7f, 0x04, 0x10, 0x10, 0x04},	//384
++	{6144000, 48000, 0x01, 0x02, 0x01, 0x01, 0x00, 0x00, 0x7f, 0x04, 0x10, 0x10, 0x04},	//128
++	{3072000, 48000, 0x01, 0x04, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x02, 0x10, 0x10, 0x04},	//64
++	{1536000, 48000, 0x01, 0x08, 0x01, 0x01, 0x00, 0x00, 0x1f, 0x02, 0x10, 0x10, 0x04},	//32
++	{12000000, 48000, 0x05, 0x08, 0x01, 0x01, 0x00, 0x00, 0xF9, 0x04, 0x19, 0x19, 0x01},	//250
++
++	/* 64k */
++	{12288000, 64000, 0x03, 0x04, 0x01, 0x01, 0x00, 0x00, 0xbf, 0x04, 0x10, 0x10, 0x04},	//192
++	{18432000, 64000, 0x01, 0x01, 0x01, 0x01, 0x00, 0x01, 0x1f, 0x06, 0x12, 0x12, 0x03},	//288
++	{16384000, 64000, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0xff, 0x04, 0x10, 0x10, 0x04},	//256
++	{8192000, 64000, 0x01, 0x02, 0x01, 0x01, 0x00, 0x00, 0x7f, 0x04, 0x10, 0x10, 0x04},	//128
++	{6144000, 64000, 0x03, 0x08, 0x01, 0x01, 0x01, 0x00, 0x5f, 0x02, 0x10, 0x10, 0x04},	//96
++	{4096000, 64000, 0x01, 0x04, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x02, 0x10, 0x10, 0x04},	//64
++	{3072000, 64000, 0x03, 0x08, 0x01, 0x01, 0x01, 0x00, 0x2f, 0x02, 0x10, 0x10, 0x04},	//48
++	{2048000, 64000, 0x01, 0x08, 0x01, 0x01, 0x00, 0x00, 0x1f, 0x02, 0x10, 0x10, 0x04},	//32
++
++	/* 88.2k */
++	{11289600, 88200, 0x01, 0x02, 0x01, 0x01, 0x00, 0x00, 0x7f, 0x04, 0x10, 0x10, 0x04},	//128
++	{5644800, 88200, 0x01, 0x04, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x02, 0x10, 0x10, 0x04},	//64
++	{2822400, 88200, 0x01, 0x08, 0x01, 0x01, 0x00, 0x00, 0x1f, 0x02, 0x10, 0x10, 0x04},	//32
++
++	/* 96k */
++	{12288000, 96000, 0x01, 0x02, 0x01, 0x01, 0x00, 0x00, 0x7f, 0x04, 0x10, 0x10, 0x04},	//128
++	{18432000, 96000, 0x03, 0x04, 0x01, 0x01, 0x00, 0x00, 0xbf, 0x04, 0x10, 0x10, 0x04},	//192
++	{6144000, 96000, 0x01, 0x04, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x02, 0x10, 0x10, 0x04},	//64
++	{3072000, 96000, 0x01, 0x08, 0x01, 0x01, 0x00, 0x00, 0x1f, 0x02, 0x10, 0x10, 0x04},	//32
++};
++static inline int get_coeff(int mclk, int rate)
++{
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(coeff_div); i++) {
++		if (coeff_div[i].rate == rate && coeff_div[i].mclk == mclk)
++			return i;
++	}
++	return -EINVAL;
++}
++
++/*
++ * if PLL not be used, use internal clk1 for mclk,otherwise, use internal clk2 for PLL source.
++ */
++static int es8311_set_dai_sysclk(struct snd_soc_dai *dai,
++			int clk_id, unsigned int freq, int dir)
++{
++	struct snd_soc_component *component = dai->component;
++	struct es8311_private *es8311 = snd_soc_component_get_drvdata(component);
++
++	pr_info("Enter into %s()\n", __func__);
++	switch (freq) {
++	case 11289600:
++	case 22579200:
++	case 5644800:
++	case 2822400:
++	case 1411200:
++	case 12288000:
++	case 16384000:
++	case 18432000:
++	case 24576000:
++	case 8192000:
++	case 6144000:
++	case 4096000:
++	case 2048000:
++	case 3072000:
++	case 1536000:
++	case 1024000:
++	case 12000000:
++		es8311->mclk_rate = freq;
++		return 0;
++	}
++
++	return -EINVAL;
++}
++
++static int es8311_set_dai_fmt(struct snd_soc_dai *component_dai, unsigned int fmt)
++{
++	struct snd_soc_component *component = component_dai->component;
++	struct es8311_private *es8311 = snd_soc_component_get_drvdata(component);
++	unsigned int iface = 0;
++	unsigned int adciface = 0;
++	unsigned int daciface = 0;
++
++	dev_dbg(component->dev, "Enter into %s()\n", __func__);
++	snd_soc_component_read(component, ES8311_RESET_REG00, &iface);
++	snd_soc_component_read(component, ES8311_SDPOUT_REG0A, &adciface);
++	snd_soc_component_read(component, ES8311_SDPIN_REG09, &daciface);
++
++	/* set master/slave audio interface */
++	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
++	case SND_SOC_DAIFMT_CBM_CFM:    /* MASTER MODE */
++		pr_info("%s mastermode\n", __func__);
++		es8311->mastermode = 1;
++		dev_dbg(component->dev, "ES8311 in Master mode\n");
++		iface |= 0x40;
++		break;
++	case SND_SOC_DAIFMT_CBS_CFS:    /* SLAVE MODE */
++		es8311->mastermode = 0;
++		dev_dbg(component->dev, "ES8311 in Slave mode\n");
++		iface &= 0xBF;
++		break;
++	default:
++		return -EINVAL;
++	}
++	snd_soc_component_write(component, ES8311_RESET_REG00, iface);
++
++
++	/* interface format */
++	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
++	case SND_SOC_DAIFMT_I2S:
++		dev_dbg(component->dev, "ES8311 in I2S Format\n");
++		adciface &= 0xFC;
++		daciface &= 0xFC;
++		break;
++	case SND_SOC_DAIFMT_RIGHT_J:
++		return -EINVAL;
++	case SND_SOC_DAIFMT_LEFT_J:
++		dev_dbg(component->dev, "ES8311 in LJ Format\n");
++		adciface &= 0xFC;
++		daciface &= 0xFC;
++		adciface |= 0x01;
++		daciface |= 0x01;
++		break;
++	case SND_SOC_DAIFMT_DSP_A:
++		dev_dbg(component->dev, "ES8311 in DSP-A Format\n");
++		adciface &= 0xDC;
++		daciface &= 0xDC;
++		adciface |= 0x03;
++		daciface |= 0x03;
++		break;
++	case SND_SOC_DAIFMT_DSP_B:
++		dev_dbg(component->dev, "ES8311 in DSP-B Format\n");
++		adciface &= 0xDC;
++		daciface &= 0xDC;
++		adciface |= 0x23;
++		daciface |= 0x23;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	snd_soc_component_read(component, ES8311_CLK_MANAGER_REG06, &iface);
++	/* clock inversion */
++	if (((fmt & SND_SOC_DAIFMT_FORMAT_MASK) == SND_SOC_DAIFMT_I2S) ||
++			((fmt & SND_SOC_DAIFMT_FORMAT_MASK) == SND_SOC_DAIFMT_LEFT_J)) {
++		switch (fmt & SND_SOC_DAIFMT_INV_MASK) {
++		case SND_SOC_DAIFMT_NB_NF:
++
++			iface    &= 0xDF;
++			adciface &= 0xDF;
++			daciface &= 0xDF;
++			break;
++		case SND_SOC_DAIFMT_IB_IF:
++			iface    |= 0x20;
++			adciface |= 0x20;
++			daciface |= 0x20;
++			break;
++		case SND_SOC_DAIFMT_IB_NF:
++			iface    |= 0x20;
++			adciface &= 0xDF;
++			daciface &= 0xDF;
++			break;
++		case SND_SOC_DAIFMT_NB_IF:
++			iface    &= 0xDF;
++			adciface |= 0x20;
++			daciface |= 0x20;
++			break;
++		default:
++			return -EINVAL;
++		}
++	}
++
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG06, iface);
++	snd_soc_component_write(component, ES8311_SDPOUT_REG0A, adciface);
++	snd_soc_component_write(component, ES8311_SDPIN_REG09, daciface);
++	return 0;
++}
++static int es8311_pcm_startup(struct snd_pcm_substream *substream,
++		struct snd_soc_dai *dai)
++{
++	return 0;
++}
++
++static int es8311_pcm_hw_params(struct snd_pcm_substream *substream,
++		struct snd_pcm_hw_params *params,
++		struct snd_soc_dai *dai)
++{
++	struct snd_soc_component *component = dai->component;
++	struct es8311_private *es8311 = snd_soc_component_get_drvdata(component);
++	unsigned int iface;
++	int coeff;
++	unsigned int regv, datmp;
++
++	pr_info("Enter into %s()\n", __func__);
++	/* we need mclk rate to configure registers. Set MCLK here if failed
++	 * to get mclk from set_sysclk.
++	 *
++	 * If the es8311->mclk_rate is a constant value, for example 12.288M,
++	 * set es8311->mclk_rate = 12288000;
++	 * else if es8311->mclk_rate is dynamic, for example 128Fs,
++	 * set es8311->mclk_rate = 128 * params_rate(params);
++	 */
++	if (es8311->mclk_src == ES8311_BCLK_PIN) {
++		/*
++		 * Here 64 is ratio of BCLK/LRCK.
++		 * If BCLK/LRCK isn't 64, please change it according to actual ratio.
++		 */
++		snd_soc_component_update_bits(component,
++				ES8311_CLK_MANAGER_REG01, 0x80, 0x80);
++		es8311->mclk_rate = 64 * params_rate(params);
++	}
++
++	pr_info("%s, mclk = %d, lrck = %d\n", __func__,
++			es8311->mclk_rate, params_rate(params));
++
++	coeff = get_coeff(es8311->mclk_rate, params_rate(params));
++	if (coeff < 0) {
++		pr_info("Unable to configure sample rate %dHz with %dHz MCLK\n",
++			params_rate(params), es8311->mclk_rate);
++		return -EINVAL;
++	}
++	/*
++	 * set clock parammeters
++	 */
++	if (coeff >= 0) {
++		snd_soc_component_read(component, ES8311_CLK_MANAGER_REG02, &regv);
++		regv = regv & 0x07;
++
++		regv |= (coeff_div[coeff].prediv - 1) << 5;
++		datmp = 0;
++		switch (coeff_div[coeff].premulti) {
++		case 1:
++			datmp = 0;
++			break;
++		case 2:
++			datmp = 1;
++			break;
++		case 4:
++			datmp = 2;
++			break;
++		case 8:
++			datmp = 3;
++			break;
++		default:
++			break;
++		}
++		regv |= (datmp) << 3;
++		snd_soc_component_write(component, ES8311_CLK_MANAGER_REG02, regv);
++
++		regv = 0x00;
++		regv |= (coeff_div[coeff].adcdiv - 1) << 4;
++		regv |= (coeff_div[coeff].dacdiv - 1) << 0;
++		snd_soc_component_write(component, ES8311_CLK_MANAGER_REG05, regv);
++
++		snd_soc_component_read(component, ES8311_CLK_MANAGER_REG03, &regv);
++		regv = regv & 0x80;
++		regv |= coeff_div[coeff].fsmode << 6;
++		regv |= coeff_div[coeff].adcosr << 0;
++		snd_soc_component_write(component, ES8311_CLK_MANAGER_REG03, regv);
++
++		snd_soc_component_read(component, ES8311_CLK_MANAGER_REG04, &regv);
++		regv = regv & 0x80;
++		regv |= coeff_div[coeff].dacosr << 0;
++		snd_soc_component_write(component, ES8311_CLK_MANAGER_REG04, regv);
++
++		snd_soc_component_read(component, ES8311_CLK_MANAGER_REG07, &regv);
++		regv = regv & 0xf0;
++		regv |= coeff_div[coeff].lrck_h << 0;
++		snd_soc_component_write(component, ES8311_CLK_MANAGER_REG07, regv);
++
++		regv = 0x00;
++		regv |= coeff_div[coeff].lrck_l << 0;
++		snd_soc_component_write(component, ES8311_CLK_MANAGER_REG08, regv);
++
++		snd_soc_component_read(component, ES8311_CLK_MANAGER_REG06, &regv);
++		regv = regv & 0xE0;
++		if (coeff_div[coeff].bclkdiv < 19)
++			regv |= (coeff_div[coeff].bclkdiv - 1) << 0;
++		else
++			regv |= coeff_div[coeff].bclkdiv << 0;
++
++		snd_soc_component_write(component, ES8311_CLK_MANAGER_REG06, regv);
++
++		snd_soc_component_read(component, ES8311_ADC_REG16, &regv);
++		regv = regv & 0x38;
++		regv |= (coeff_div[coeff].adcscale) << 0;
++		snd_soc_component_write(component, ES8311_ADC_REG16, regv);
++	}
++
++	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
++		snd_soc_component_read(component, ES8311_SDPIN_REG09, &iface);
++		iface = iface & 0xE3;
++		/* bit size */
++		switch (params_format(params)) {
++		case SNDRV_PCM_FORMAT_S16_LE:
++			iface |= 0x0c;
++			break;
++		case SNDRV_PCM_FORMAT_S20_3LE:
++			iface |= 0x04;
++			break;
++		case SNDRV_PCM_FORMAT_S24_LE:
++			break;
++		case SNDRV_PCM_FORMAT_S32_LE:
++			iface |= 0x10;
++			break;
++		}
++		/* set iface */
++		snd_soc_component_write(component, ES8311_SDPIN_REG09, iface);
++	} else {
++		snd_soc_component_read(component, ES8311_SDPOUT_REG0A, &iface);
++		iface = iface & 0xE3;
++		/* bit size */
++		switch (params_format(params)) {
++		case SNDRV_PCM_FORMAT_S16_LE:
++			iface |= 0x0c;
++			break;
++		case SNDRV_PCM_FORMAT_S20_3LE:
++			iface |= 0x04;
++			break;
++		case SNDRV_PCM_FORMAT_S24_LE:
++			break;
++		case SNDRV_PCM_FORMAT_S32_LE:
++			iface |= 0x10;
++			break;
++		}
++		/* set iface */
++		snd_soc_component_write(component, ES8311_SDPOUT_REG0A, iface);
++	}
++	return 0;
++}
++
++static int es8311_set_bias_level(struct snd_soc_component *component,
++			enum snd_soc_bias_level level)
++{
++	unsigned int regv;
++	struct es8311_private *es8311 = snd_soc_component_get_drvdata(component);
++
++	pr_info("Enter into %s(), level = %d\n", __func__, level);
++	switch (level) {
++	case SND_SOC_BIAS_ON:
++		pr_info("%s on\n", __func__);
++		snd_soc_component_write(component, ES8311_GP_REG45, 0x00);
++		if (es8311->mclk_src == ES8311_MCLK_PIN) {
++			snd_soc_component_write(component,
++					ES8311_CLK_MANAGER_REG01, 0x30);
++		} else {
++			snd_soc_component_write(component,
++					ES8311_CLK_MANAGER_REG01, 0xB0);
++		}
++		//snd_soc_component_write(component, ES8311_ADC_REG16, 0x24);
++		snd_soc_component_write(component, ES8311_SYSTEM_REG0B, 0x00);
++		snd_soc_component_write(component, ES8311_SYSTEM_REG0C, 0x00);
++		if (ES8311_AVDD == ES8311_1V8) {
++			snd_soc_component_write(component,
++					ES8311_SYSTEM_REG10, 0x61);
++			snd_soc_component_write(component,
++					ES8311_SYSTEM_REG11, 0x7B);
++		} else {
++			snd_soc_component_write(component,
++					ES8311_SYSTEM_REG10, 0x03);
++			snd_soc_component_write(component,
++					ES8311_SYSTEM_REG11, 0x57);
++		}
++
++		if (es8311->mclk_src == ES8311_MCLK_PIN) {
++			snd_soc_component_write(component,
++					ES8311_CLK_MANAGER_REG01, 0x3F);
++		} else {
++			snd_soc_component_write(component,
++					ES8311_CLK_MANAGER_REG01, 0xBF);
++		}
++		if (es8311->mclkinv == true) {
++			snd_soc_component_update_bits(component,
++					ES8311_CLK_MANAGER_REG01, 0x40, 0x40);
++		} else {
++			snd_soc_component_update_bits(component,
++					ES8311_CLK_MANAGER_REG01, 0x40, 0x00);
++		}
++		if (es8311->sclkinv == true) {
++			snd_soc_component_update_bits(component,
++					ES8311_CLK_MANAGER_REG06, 0x20, 0x20);
++		} else {
++			snd_soc_component_update_bits(component,
++					ES8311_CLK_MANAGER_REG06, 0x20, 0x00);
++		}
++
++		//digital reset
++		snd_soc_component_write(component, ES8311_RESET_REG00, 0x1f);
++		usleep_range(1000, 2000);
++		if (es8311->mastermode == 1) {
++			snd_soc_component_write(component,
++					ES8311_RESET_REG00, 0xC0);
++		} else {
++			snd_soc_component_write(component,
++					ES8311_RESET_REG00, 0x80);
++		}
++		usleep_range(1500, 3000);
++
++		snd_soc_component_write(component, ES8311_SYSTEM_REG0D, 0x01);
++
++		snd_soc_component_read(component, ES8311_SYSTEM_REG14, &regv);
++		regv = regv & 0xCF;
++		regv |= 0x10;
++		snd_soc_component_write(component, ES8311_SYSTEM_REG14, regv);
++
++		if (es8311->dmic_enable == true) {
++			snd_soc_component_update_bits(component, ES8311_SYSTEM_REG14,
++					0x40, 0x40);
++		} else {
++			snd_soc_component_update_bits(component, ES8311_SYSTEM_REG14,
++					0x40, 0x00);
++		}
++		snd_soc_component_write(component, ES8311_SYSTEM_REG12, 0x00);
++		snd_soc_component_write(component, ES8311_SYSTEM_REG13, 0x10);
++		snd_soc_component_write(component, ES8311_SYSTEM_REG0E, 0x02);
++		snd_soc_component_write(component, ES8311_SYSTEM_REG0F, 0x7F);
++		snd_soc_component_write(component, ES8311_ADC_REG15, 0x40);
++		snd_soc_component_write(component, ES8311_ADC_REG1B, 0x0A);
++		snd_soc_component_write(component, ES8311_ADC_REG1C, 0x6A);
++		snd_soc_component_write(component, ES8311_DAC_REG37, 0x48);
++		//snd_soc_component_write(component, ES8311_ADC_REG17, 0xBF);
++		//snd_soc_component_write(component, ES8311_DAC_REG32, 0xBF);
++		break;
++	case SND_SOC_BIAS_PREPARE:
++		pr_info("%s prepare\n", __func__);
++		break;
++	case SND_SOC_BIAS_STANDBY:
++		pr_info("%s standby\n", __func__);
++		if (es8311->bias_level == SND_SOC_BIAS_PREPARE) {
++			//snd_soc_component_write(component, ES8311_DAC_REG32, 0x00);
++			//snd_soc_component_write(component, ES8311_ADC_REG17, 0x00);
++			snd_soc_component_write(component, ES8311_SYSTEM_REG0E, 0xFF);
++			snd_soc_component_write(component, ES8311_SYSTEM_REG12, 0x02);
++			snd_soc_component_write(component, ES8311_SYSTEM_REG14, 0x00);
++			snd_soc_component_write(component, ES8311_SYSTEM_REG0D, 0xF9);
++			snd_soc_component_write(component, ES8311_ADC_REG15, 0x00);
++			snd_soc_component_write(component, ES8311_DAC_REG37, 0x08);
++			snd_soc_component_write(component, ES8311_CLK_MANAGER_REG02, 0x10);
++			snd_soc_component_write(component, ES8311_RESET_REG00, 0x00);
++			snd_soc_component_write(component, ES8311_RESET_REG00, 0x1F);
++			snd_soc_component_write(component, ES8311_CLK_MANAGER_REG01, 0x30);
++			snd_soc_component_write(component, ES8311_CLK_MANAGER_REG01, 0x00);
++			snd_soc_component_write(component, ES8311_GP_REG45, 0x00);
++		}
++		break;
++	case SND_SOC_BIAS_OFF:
++		pr_info("%s off\n", __func__);
++		if (es8311->bias_level == SND_SOC_BIAS_STANDBY) {
++			//snd_soc_component_write(component, ES8311_DAC_REG32, 0x00);
++			//snd_soc_component_write(component, ES8311_ADC_REG17, 0x00);
++			snd_soc_component_write(component, ES8311_SYSTEM_REG0E, 0xFF);
++			snd_soc_component_write(component, ES8311_SYSTEM_REG12, 0x02);
++			snd_soc_component_write(component, ES8311_SYSTEM_REG14, 0x00);
++			snd_soc_component_write(component, ES8311_SYSTEM_REG0D, 0xF9);
++			snd_soc_component_write(component, ES8311_ADC_REG15, 0x00);
++			snd_soc_component_write(component, ES8311_DAC_REG37, 0x08);
++			snd_soc_component_write(component, ES8311_CLK_MANAGER_REG02, 0x10);
++			snd_soc_component_write(component, ES8311_RESET_REG00, 0x00);
++			snd_soc_component_write(component, ES8311_RESET_REG00, 0x1F);
++			snd_soc_component_write(component, ES8311_CLK_MANAGER_REG01, 0x30);
++			snd_soc_component_write(component, ES8311_CLK_MANAGER_REG01, 0x00);
++			snd_soc_component_write(component, ES8311_GP_REG45, 0x00);
++			snd_soc_component_write(component, ES8311_SYSTEM_REG0D, 0xFC);
++			snd_soc_component_write(component, ES8311_CLK_MANAGER_REG02, 0x00);
++		}
++		break;
++	}
++	es8311->bias_level = level;
++	return 0;
++}
++
++static int es8311_set_tristate(struct snd_soc_dai *dai, int tristate)
++{
++	struct snd_soc_component *component = dai->component;
++
++	pr_info("Enter into %s(), tristate = %d\n", __func__, tristate);
++	if (tristate) {
++		snd_soc_component_update_bits(component,
++				ES8311_CLK_MANAGER_REG07, 0x30, 0x30);
++	} else {
++		snd_soc_component_update_bits(component,
++				ES8311_CLK_MANAGER_REG07, 0x30, 0x00);
++	}
++	return 0;
++}
++
++static int es8311_mute(struct snd_soc_dai *dai, int mute, int direction)
++{
++	struct snd_soc_component *component = dai->component;
++
++	pr_info("Enter into %s(), mute = %d\n", __func__, mute);
++
++	if (mute) {
++		snd_soc_component_write(component, ES8311_SYSTEM_REG12,
++				0x02);
++		snd_soc_component_update_bits(component, ES8311_DAC_REG31,
++				0x60, 0x60);
++		//snd_soc_component_write(component, ES8311_DAC_REG32, 0x00);
++	} else {
++		snd_soc_component_update_bits(component, ES8311_DAC_REG31,
++				0x60, 0x00);
++		snd_soc_component_write(component, ES8311_SYSTEM_REG12,
++				0x00);
++		//snd_soc_component_write(component, ES8311_DAC_REG32, 0xbf);
++	}
++	return 0;
++}
++
++#define es8311_RATES SNDRV_PCM_RATE_8000_96000
++
++#define es8311_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE |\
++		SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S24_3LE | SNDRV_PCM_FMTBIT_S32_LE)
++
++static const struct snd_soc_dai_ops es8311_ops = {
++	.startup = es8311_pcm_startup,
++	.hw_params = es8311_pcm_hw_params,
++	.set_fmt = es8311_set_dai_fmt,
++	.set_sysclk = es8311_set_dai_sysclk,
++	.mute_stream = es8311_mute,
++	.set_tristate = es8311_set_tristate,
++};
++
++static struct snd_soc_dai_driver es8311_dai = {
++	.name = "ES8311 HiFi",
++	.playback = {
++		.stream_name = "Playback",
++		.channels_min = 1,
++		.channels_max = 2,
++		.rates = es8311_RATES,
++		.formats = es8311_FORMATS,
++	},
++	.capture = {
++		.stream_name = "Capture",
++		.channels_min = 1,
++		.channels_max = 2,
++		.rates = es8311_RATES,
++		.formats = es8311_FORMATS,
++	},
++	.ops = &es8311_ops,
++	.symmetric_rates = 1,
++};
++
++static int es8311_suspend(struct snd_soc_component *component)
++{
++	pr_info("Enter into %s()\n", __func__);
++	//snd_soc_component_write(component, ES8311_DAC_REG32, 0x00);
++	//snd_soc_component_write(component, ES8311_ADC_REG17, 0x00);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG0E, 0x5F);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG12, 0x02);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG14, 0x00);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG0D, 0xF9);
++	snd_soc_component_write(component, ES8311_ADC_REG15, 0x00);
++	snd_soc_component_write(component, ES8311_DAC_REG37, 0x08);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG02, 0x10);
++	snd_soc_component_write(component, ES8311_RESET_REG00, 0x00);
++	snd_soc_component_write(component, ES8311_RESET_REG00, 0x1F);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG01, 0x30);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG01, 0x00);
++	snd_soc_component_write(component, ES8311_GP_REG45, 0x00);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG0D, 0xFC);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG02, 0x00);
++	return 0;
++}
++
++static int es8311_resume(struct snd_soc_component *component)
++{
++	struct es8311_private *es8311 = snd_soc_component_get_drvdata(component);
++
++	pr_info("Enter into %s()\n", __func__);
++	snd_soc_component_write(component, ES8311_GP_REG45, 0x00);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG01, 0x30);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG02, 0x00);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG03, 0x10);
++	snd_soc_component_write(component, ES8311_ADC_REG16, 0x24);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG04, 0x10);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG05, 0x00);
++	snd_soc_component_write(component, ES8311_SDPIN_REG09, 0x00);
++	snd_soc_component_write(component, ES8311_SDPOUT_REG0A, 0x00);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG0B, 0x00);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG0C, 0x00);
++
++	if (ES8311_AVDD == ES8311_1V8) {
++		snd_soc_component_write(component, ES8311_SYSTEM_REG10, 0x61);
++		snd_soc_component_write(component, ES8311_SYSTEM_REG11, 0x7B);
++	} else {
++		snd_soc_component_write(component, ES8311_SYSTEM_REG10, 0x03);
++		snd_soc_component_write(component, ES8311_SYSTEM_REG11, 0x57);
++	}
++	if (es8311->mclk_src == ES8311_MCLK_PIN) {
++		snd_soc_component_write(component, ES8311_CLK_MANAGER_REG01, 0x3F);
++		snd_soc_component_write(component, ES8311_CLK_MANAGER_REG01, 0xBF);
++	}
++	if (es8311->mastermode == 1)
++		snd_soc_component_write(component, ES8311_RESET_REG00, 0xC0);
++	else
++		snd_soc_component_write(component, ES8311_RESET_REG00, 0x80);
++
++	usleep_range(1500, 3000);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG0D, 0x01);
++
++	if (es8311->mclkinv == true) {
++		snd_soc_component_update_bits(component, ES8311_CLK_MANAGER_REG01,
++				0x40, 0x40);
++	} else {
++		snd_soc_component_update_bits(component, ES8311_CLK_MANAGER_REG01,
++				0x40, 0x00);
++	}
++	if (es8311->sclkinv == true) {
++		snd_soc_component_update_bits(component, ES8311_CLK_MANAGER_REG06,
++				0x20, 0x20);
++	} else {
++		snd_soc_component_update_bits(component, ES8311_CLK_MANAGER_REG06,
++				0x20, 0x00);
++	}
++	snd_soc_component_write(component, ES8311_SYSTEM_REG14, 0x1A);
++	if (es8311->dmic_enable == true) {
++		snd_soc_component_update_bits(component, ES8311_SYSTEM_REG14,
++				0x40, 0x40);
++	} else {
++		snd_soc_component_update_bits(component, ES8311_SYSTEM_REG14,
++				0x40, 0x00);
++	}
++	snd_soc_component_write(component, ES8311_SYSTEM_REG12, 0x00);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG13, 0x10);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG0E, 0x02);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG0F, 0x7F);
++	snd_soc_component_write(component, ES8311_ADC_REG15, 0x40);
++	snd_soc_component_write(component, ES8311_ADC_REG1B, 0x0A);
++	snd_soc_component_write(component, ES8311_ADC_REG1C, 0x6A);
++	snd_soc_component_write(component, ES8311_DAC_REG37, 0x48);
++	snd_soc_component_write(component, ES8311_ADC_REG17, 0xBF);
++	snd_soc_component_write(component, ES8311_DAC_REG32, 0xBF);
++
++	return 0;
++}
++
++static int es8311_probe(struct snd_soc_component *component)
++{
++	int ret = 0;
++	struct es8311_private *es8311 = es8311_data;
++
++	pr_info("Enter into %s()\n", __func__);
++
++	snd_soc_component_set_drvdata(component, es8311);
++	if (component == NULL) {
++		dev_err(component->dev, "Codec device not registered\n");
++		return -ENODEV;
++	}
++	es8311_component = component;
++	es8311->component = component;
++
++	es8311->mastermode = 0;
++	es8311->mclk_src = ES8311_MCLK_SOURCE;
++	/* Enable the following code if there is no mclk.
++	 * a clock named "mclk" need to be defined in the dts (see sample dts)
++	 *
++	 * No need to enable the following code to get mclk in following condition,
++	 * first, sclk/bclk is used as mclk, second, mclk is controled by soc I2S
++	 */
++	if (es8311->mclk_src == ES8311_MCLK_PIN) {
++		es8311->mclk = devm_clk_get(component->dev, "mclk");
++		if (IS_ERR(es8311->mclk)) {
++			dev_err(component->dev, "%s,unable to get mclk\n", __func__);
++			return PTR_ERR(es8311->mclk);
++		}
++		if (!es8311->mclk)
++			dev_err(component->dev, "%s, assuming static mclk\n", __func__);
++
++		ret = clk_prepare_enable(es8311->mclk);
++		if (ret) {
++			dev_err(component->dev, "%s, unable to enable mclk\n", __func__);
++			return ret;
++		}
++	}
++	snd_soc_component_write(component, ES8311_GP_REG45, 0x00);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG01, 0x30);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG02, 0x00);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG03, 0x10);
++	snd_soc_component_write(component, ES8311_ADC_REG16, 0x24);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG04, 0x10);
++	snd_soc_component_write(component, ES8311_CLK_MANAGER_REG05, 0x00);
++	snd_soc_component_write(component, ES8311_SDPIN_REG09, 0x00);
++	snd_soc_component_write(component, ES8311_SDPOUT_REG0A, 0x00);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG0B, 0x00);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG0C, 0x00);
++	if (ES8311_AVDD == ES8311_1V8) {
++		snd_soc_component_write(component, ES8311_SYSTEM_REG10, 0x61);
++		snd_soc_component_write(component, ES8311_SYSTEM_REG11, 0x7B);
++	} else {
++		snd_soc_component_write(component, ES8311_SYSTEM_REG10, 0x03);
++		snd_soc_component_write(component, ES8311_SYSTEM_REG11, 0x57);
++	}
++
++	if (es8311->mclk_src == ES8311_MCLK_PIN)
++		snd_soc_component_write(component, ES8311_CLK_MANAGER_REG01, 0x3F);
++	else
++		snd_soc_component_write(component, ES8311_CLK_MANAGER_REG01, 0xBF);
++
++	if (es8311->mastermode == 1)
++		snd_soc_component_write(component, ES8311_RESET_REG00, 0xC0);
++	else
++		snd_soc_component_write(component, ES8311_RESET_REG00, 0x80);
++
++	usleep_range(1500, 3000);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG0D, 0x01);
++
++	if (es8311->mclkinv == true) {
++		snd_soc_component_update_bits(component, ES8311_CLK_MANAGER_REG01,
++				0x40, 0x40);
++	} else {
++		snd_soc_component_update_bits(component, ES8311_CLK_MANAGER_REG01,
++				0x40, 0x00);
++	}
++	if (es8311->sclkinv == true) {
++		snd_soc_component_update_bits(component, ES8311_CLK_MANAGER_REG06,
++				0x20, 0x20);
++	} else {
++		snd_soc_component_update_bits(component, ES8311_CLK_MANAGER_REG06,
++				0x20, 0x00);
++	}
++	snd_soc_component_write(component, ES8311_SYSTEM_REG14, 0x1A);
++	if (es8311->dmic_enable == true) {
++		snd_soc_component_update_bits(component, ES8311_SYSTEM_REG14,
++				0x40, 0x40);
++	} else {
++		snd_soc_component_update_bits(component, ES8311_SYSTEM_REG14,
++				0x40, 0x00);
++	}
++	snd_soc_component_write(component, ES8311_SYSTEM_REG12, 0x00);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG13, 0x10);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG0E, 0x02);
++	snd_soc_component_write(component, ES8311_SYSTEM_REG0F, 0x7F);
++	snd_soc_component_write(component, ES8311_ADC_REG15, 0x40);
++	snd_soc_component_write(component, ES8311_ADC_REG1B, 0x0A);
++	snd_soc_component_write(component, ES8311_ADC_REG1C, 0x6A);
++	snd_soc_component_write(component, ES8311_DAC_REG37, 0x48);
++	snd_soc_component_write(component, ES8311_ADC_REG17, 0xBF);
++	snd_soc_component_write(component, ES8311_DAC_REG32, 0xBF);
++	msleep(100);
++	es8311_set_bias_level(component, SND_SOC_BIAS_STANDBY);
++
++	return ret;
++}
++
++static void es8311_remove(struct snd_soc_component *component)
++{
++	es8311_set_bias_level(component, SND_SOC_BIAS_OFF);
++}
++
++static const struct snd_soc_component_driver soc_component_dev_es8311 = {
++	.probe = es8311_probe,
++	.remove = es8311_remove,
++	.suspend = es8311_suspend,
++	.resume = es8311_resume,
++	.set_bias_level = es8311_set_bias_level,
++	.suspend_bias_off = 1,
++	.idle_bias_on = 1,
++
++	.controls = es8311_snd_controls,
++	.num_controls = ARRAY_SIZE(es8311_snd_controls),
++	.dapm_widgets = es8311_dapm_widgets,
++	.num_dapm_widgets = ARRAY_SIZE(es8311_dapm_widgets),
++	.dapm_routes = es8311_dapm_routes,
++	.num_dapm_routes = ARRAY_SIZE(es8311_dapm_routes),
++};
++
++static struct regmap_config es8311_regmap = {
++	.reg_bits = 8,
++	.val_bits = 8,
++
++	.max_register = ES8311_MAX_REGISTER,
++
++	.volatile_reg = es8311_volatile_register,
++	.writeable_reg = es8311_writable_register,
++	.readable_reg  = es8311_readable_register,
++	.cache_type = REGCACHE_RBTREE,
++};
++
++#ifdef CONFIG_OF
++static const struct of_device_id es8311_if_dt_ids[] = {
++	{.compatible = "everest,es8311", },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, es8311_if_dt_ids);
++#endif
++
++static void es8311_i2c_shutdown(struct i2c_client *i2c)
++{
++
++}
++
++static u32 cur_reg;
++
++static ssize_t es8311_show(struct device *dev,
++			struct device_attribute *attr, char *_buf)
++{
++	int ret;
++	unsigned int regv = 0;
++
++	snd_soc_component_read(es8311_component, cur_reg, &regv);
++	ret = sprintf(_buf, "%s(): get 0x%04x=0x%04x\n", __func__, cur_reg, regv);
++	return ret;
++}
++
++static ssize_t es8311_store(struct device *dev, struct device_attribute *attr,
++		const char *buf, size_t count)
++{
++	int val = 0, flag = 0;
++	u8 i = 0, reg, num, value_w;
++	unsigned int value_r;
++
++	val = simple_strtol(buf, NULL, 16);
++	flag = (val >> 16) & 0xFF;
++
++	if (flag) {
++		reg = (val >> 8) & 0xFF;
++		value_w = val & 0xFF;
++		pr_info("\nWrite: start REG:0x%02x,val:0x%02x,count:0x%02x\n",
++				reg, value_w, flag);
++		while (flag--) {
++			snd_soc_component_write(es8311_component, reg, value_w);
++			pr_info("Write 0x%02x to REG:0x%02x\n", value_w, reg);
++			reg++;
++		}
++	} else {
++		reg = (val >> 8) & 0xFF;
++		num = val & 0xff;
++		pr_info("\nRead: start REG:0x%02x,count:0x%02x\n", reg, num);
++		do {
++			value_r = 0;
++			snd_soc_component_read(es8311_component, reg, &value_r);
++			pr_info("REG[0x%02x]: 0x%02x;\n", reg, value_r);
++			reg++;
++			i++;
++		} while (i < num);
++	}
++
++	return count;
++}
++
++static DEVICE_ATTR(es8311, 0664, es8311_show, es8311_store);
++
++static struct attribute *es8311_debug_attrs[] = {
++	&dev_attr_es8311.attr,
++	NULL,
++};
++
++static struct attribute_group es8311_debug_attr_group = {
++	.name   = "es8311_debug",
++	.attrs  = es8311_debug_attrs,
++};
++
++static int es8311_i2c_probe(struct i2c_client *i2c_client,
++					const struct i2c_device_id *id)
++{
++	struct es8311_private *es8311;
++	int ret = -1;
++	unsigned int val;
++
++	pr_info("Enter into %s\n", __func__);
++	es8311 = devm_kzalloc(&i2c_client->dev,
++			sizeof(*es8311), GFP_KERNEL);
++	if (es8311 == NULL)
++		return -ENOMEM;
++
++	es8311->dmic_enable = false;     // dmic interface disabled
++	/* the edge of lrck is always at the falling edge of mclk */
++	es8311->mclkinv = false;
++	/* the edge of lrck is always at the falling edge of sclk */
++	es8311->sclkinv = false;
++
++	i2c_set_clientdata(i2c_client, es8311);
++	es8311->regmap = devm_regmap_init_i2c(i2c_client, &es8311_regmap);
++	if (IS_ERR(es8311->regmap)) {
++		ret = PTR_ERR(es8311->regmap);
++		dev_err(&i2c_client->dev, "regmap_init() failed: %d\n", ret);
++		return ret;
++	}
++	/* verify that we have an es8311 */
++	ret = regmap_read(es8311->regmap, ES8311_CHD1_REGFD, &val);
++	if (ret < 0) {
++		dev_err(&i2c_client->dev, "failed to read i2c at addr %X\n",
++		       i2c_client->addr);
++		return ret;
++	}
++	/* The first ID should be 0x83 */
++	if (val != 0x83) {
++		dev_err(&i2c_client->dev, "device at addr %X is not an es8311\n",
++		       i2c_client->addr);
++		return -ENODEV;
++	}
++	ret = regmap_read(es8311->regmap, ES8311_CHD2_REGFE, &val);
++	/* The NEXT ID should be 0x11 */
++	if (val != 0x11) {
++		dev_err(&i2c_client->dev, "device at addr %X is not an es8311\n",
++		       i2c_client->addr);
++		return -ENODEV;
++	}
++	es8311_data = es8311;
++
++	ret =  snd_soc_register_component(&i2c_client->dev,
++			&soc_component_dev_es8311,
++			&es8311_dai,
++			1);
++	if (ret < 0) {
++		kfree(es8311);
++		return ret;
++	}
++
++	pr_info("Enter into %s-----4\n", __func__);
++	ret = sysfs_create_group(&i2c_client->dev.kobj,
++				&es8311_debug_attr_group);
++	if (ret)
++		pr_err("failed to create attr group\n");
++
++	return ret;
++}
++
++static const struct i2c_device_id es8311_i2c_id[] = {
++	{"es8311", 0 },
++	{ }
++};
++MODULE_DEVICE_TABLE(i2c, es8311_i2c_id);
++
++static struct i2c_driver es8311_i2c_driver = {
++	.driver = {
++		.name	= "es8311",
++		.owner	= THIS_MODULE,
++		.of_match_table = es8311_if_dt_ids,
++	},
++	.shutdown = es8311_i2c_shutdown,
++	.probe = es8311_i2c_probe,
++	.id_table	= es8311_i2c_id,
++};
++
++static int __init es8311_init(void)
++{
++	int ret;
++
++	ret = i2c_add_driver(&es8311_i2c_driver);
++	if (ret != 0)
++		pr_info("Failed to register es8311 i2c driver\n");
++	return ret;
++}
++
++static void __exit es8311_exit(void)
++{
++	return i2c_del_driver(&es8311_i2c_driver);
++}
++
++late_initcall(es8311_init);
++module_exit(es8311_exit);
++
++MODULE_DESCRIPTION("ASoC es8311 driver");
++MODULE_AUTHOR("David Yang <yangxiaohua@everest-semi.com>");
++MODULE_LICENSE("GPL");
++
++
+diff --git a/sound/soc/codecs/es8311.h b/sound/soc/codecs/es8311.h
+new file mode 100755
+index 000000000..cb6e66317
+--- /dev/null
++++ b/sound/soc/codecs/es8311.h
+@@ -0,0 +1,82 @@
++/*
++* ES8311.h  --  ES8311 ALSA SoC Audio Codec
++*
++* Authors:
++*
++* Based on ES8374.h by David Yang
++*
++* This program is free software; you can redistribute it and/or modify
++* it under the terms of the GNU General Public License version 2 as
++* published by the Free Software Foundation.
++*/
++
++#ifndef _ES8311_H
++#define _ES8311_H
++
++/*
++*	ES8311_REGISTER NAME_REG_REGISTER ADDRESS
++*/
++#define ES8311_RESET_REG00			0x00  /*reset digital,csm,clock manager etc.*/
++
++/*
++* Clock Scheme Register definition
++*/
++#define ES8311_CLK_MANAGER_REG01		0x01 /* select clk src for mclk, enable clock for codec */
++#define ES8311_CLK_MANAGER_REG02		0x02 /* clk divider and clk multiplier */
++#define ES8311_CLK_MANAGER_REG03		0x03 /* adc fsmode and osr  */
++#define ES8311_CLK_MANAGER_REG04		0x04 /* dac osr */
++#define ES8311_CLK_MANAGER_REG05		0x05 /* clk divier for adc and dac */
++#define ES8311_CLK_MANAGER_REG06		0x06 /* bclk inverter and divider */
++#define ES8311_CLK_MANAGER_REG07		0x07 /* tri-state, lrck divider */
++#define ES8311_CLK_MANAGER_REG08		0x08 /* lrck divider */
++#define ES8311_SDPIN_REG09			0x09 /* dac serial digital port */
++#define ES8311_SDPOUT_REG0A			0x0A /* adc serial digital port */
++#define ES8311_SYSTEM_REG0B			0x0B /* system */
++#define ES8311_SYSTEM_REG0C			0x0C /* system */
++#define ES8311_SYSTEM_REG0D			0x0D /* system, power up/down */
++#define ES8311_SYSTEM_REG0E			0x0E /* system, power up/down */
++#define ES8311_SYSTEM_REG0F			0x0F /* system, low power */
++#define ES8311_SYSTEM_REG10			0x10 /* system */
++#define ES8311_SYSTEM_REG11			0x11 /* system */
++#define ES8311_SYSTEM_REG12			0x12 /* system, Enable DAC */
++#define ES8311_SYSTEM_REG13			0x13 /* system */
++#define ES8311_SYSTEM_REG14			0x14 /* system, select DMIC, select analog pga gain */
++#define ES8311_ADC_REG15			0x15 /* ADC, adc ramp rate, dmic sense */
++#define ES8311_ADC_REG16			0x16 /* ADC */
++#define ES8311_ADC_REG17			0x17 /* ADC, volume */
++#define ES8311_ADC_REG18			0x18 /* ADC, alc enable and winsize */
++#define ES8311_ADC_REG19			0x19 /* ADC, alc maxlevel */
++#define ES8311_ADC_REG1A			0x1A /* ADC, alc automute */
++#define ES8311_ADC_REG1B			0x1B /* ADC, alc automute, adc hpf s1 */
++#define ES8311_ADC_REG1C			0x1C /* ADC, equalizer, hpf s2 */
++#define ES8311_DAC_REG31			0x31 /* DAC, mute */
++#define ES8311_DAC_REG32			0x32 /* DAC, volume */
++#define ES8311_DAC_REG33			0x33 /* DAC, offset */
++#define ES8311_DAC_REG34			0x34 /* DAC, drc enable, drc winsize */
++#define ES8311_DAC_REG35			0x35 /* DAC, drc maxlevel, minilevel */
++#define ES8311_DAC_REG37			0x37 /* DAC, ramprate */
++#define ES8311_GPIO_REG44			0x44 /* GPIO, dac2adc for test */
++#define ES8311_GP_REG45				0x45 /* GP CONTROL */
++#define ES8311_CHD1_REGFD			0xFD /* CHIP ID1 */
++#define ES8311_CHD2_REGFE			0xFE /* CHIP ID2 */
++#define ES8311_CHVER_REGFF			0xFF /* VERSION */
++#define ES8311_CHD1_REGFD			0xFD /* CHIP ID1 */
++
++#define ES8311_MAX_REGISTER			0xFF
++
++enum vmidlow {
++	VMIDLEVEL0,
++	VMIDLEVEL1,
++	VMIDLEVEL2,
++	VMIDLEVEL3,
++};
++/* The VMIDLEVEL is different for 1.8V AVDD */
++#define ES8311_3V3 0
++#define ES8311_1V8 1
++#define ES8311_AVDD ES8311_3V3
++
++#define ES8311_MCLK_PIN	0
++#define ES8311_BCLK_PIN 1
++#define ES8311_MCLK_SOURCE	ES8311_BCLK_PIN
++
++#endif
+diff --git a/sound/soc/codecs/es8375.c b/sound/soc/codecs/es8375.c
+new file mode 100644
+index 000000000..06ba3cbca
+--- /dev/null
++++ b/sound/soc/codecs/es8375.c
+@@ -0,0 +1,796 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * es8375.c  --  ES8375 ALSA SoC Audio Codec
++ *
++ * Copyright Everest Semiconductor Co., Ltd
++ *
++ * Authors:  Michael Zhang (zhangyi@everest-semi.com)
++ */
++
++#include <linux/gpio/consumer.h>
++#include <linux/clk.h>
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/delay.h>
++#include <linux/i2c.h>
++#include <linux/regmap.h>
++#include <linux/regulator/consumer.h>
++#include <sound/core.h>
++#include <sound/pcm.h>
++#include <sound/pcm_params.h>
++#include <sound/tlv.h>
++#include <sound/soc.h>
++#include <linux/acpi.h>
++#include "es8375.h"
++
++struct	es8375_priv {
++	struct regmap *regmap;
++	struct clk *mclk;
++	struct regulator_bulk_data core_supply[2];
++	unsigned int  mclk_freq;
++	int mastermode;
++	u8 mclk_src;
++	u8 vddd;
++	enum snd_soc_bias_level bias_level;
++};
++
++static const char * const es8375_core_supplies[] = {
++	"vddd",
++	"vdda",
++};
++
++static const DECLARE_TLV_DB_SCALE(es8375_adc_osr_gain_tlv, -3100, 100, 0);
++static const DECLARE_TLV_DB_SCALE(es8375_adc_volume_tlv, -9550, 50, 0);
++static const DECLARE_TLV_DB_SCALE(es8375_adc_automute_attn_tlv, 0, 100, 0);
++static const DECLARE_TLV_DB_SCALE(es8375_adc_dmic_volume_tlv, 0, 600, 0);
++static const DECLARE_TLV_DB_SCALE(es8375_dac_volume_tlv, -9550, 50, 0);
++static const DECLARE_TLV_DB_SCALE(es8375_dac_vppscale_tlv, -388, 12, 0);
++static const DECLARE_TLV_DB_SCALE(es8375_dac_automute_attn_tlv, 0, 400, 0);
++static const DECLARE_TLV_DB_SCALE(es8375_automute_ng_tlv, -9600, 600, 0);
++
++static const char *const es8375_ramprate_txt[] = {
++	"0.125dB/LRCK",
++	"0.125dB/2LRCK",
++	"0.125dB/4LRCK",
++	"0.125dB/8LRCK",
++	"0.125dB/16LRCK",
++	"0.125dB/32LRCK",
++	"0.125dB/64LRCK",
++	"0.125dB/128LRCK",
++	"disable softramp",
++};
++static SOC_ENUM_SINGLE_DECL(es8375_adc_ramprate, ES8375_ADC2,
++		ADC_RAMPRATE_SHIFT_0, es8375_ramprate_txt);
++static SOC_ENUM_SINGLE_DECL(es8375_dac_ramprate, ES8375_DAC2,
++		DAC_RAMPRATE_SHIFT_0, es8375_ramprate_txt);
++
++static const char *const es8375_automute_ws_txt[] = {
++	"256 samples",
++	"512 samples",
++	"1024 samples",
++	"2048 samples",
++	"4096 samples",
++	"8192 samples",
++	"16384 samples",
++	"32768 samples",
++};
++static SOC_ENUM_SINGLE_DECL(es8375_adc_automute_ws, ES8375_ADC_AUTOMUTE,
++		ADC_AUTOMUTE_WS_SHIFT_3, es8375_automute_ws_txt);
++static SOC_ENUM_SINGLE_DECL(es8375_dac_automute_ws, ES8375_DAC_AUTOMUTE,
++		DAC_AUTOMUTE_WS_SHIFT_5, es8375_automute_ws_txt);
++
++static const char *const es8375_dmic_pol_txt[] = {
++	"Low",
++	"High",
++};
++
++static SOC_ENUM_SINGLE_DECL(es8375_dmic_pol, ES8375_ADC1,
++		DMIC_POL_SHIFT_4, es8375_dmic_pol_txt);
++
++static const char *const es8375_adc_hpf_txt[] = {
++	"Freeze Offset",
++	"Dynamic HPF",
++};
++
++static SOC_ENUM_SINGLE_DECL(es8375_adc_hpf, ES8375_HPF1,
++		ADC_HPF_SHIFT_5, es8375_adc_hpf_txt);
++
++static const char *const es8375_dmic_mux_txt[] = {
++	"AMIC",
++	"DMIC",
++};
++static const struct soc_enum es8375_dmic_mux_enum =
++	SOC_ENUM_SINGLE(ES8375_ADC1, ADC_SRC_SHIFT_7,
++			ARRAY_SIZE(es8375_dmic_mux_txt), es8375_dmic_mux_txt);
++
++static const struct snd_kcontrol_new es8375_dmic_mux_controls =
++	SOC_DAPM_ENUM("ADC MUX", es8375_dmic_mux_enum);
++
++static const struct snd_kcontrol_new es8375_snd_controls[] = {
++	SOC_SINGLE_TLV("ADC OSR Volume", ES8375_ADC_OSR_GAIN,
++			ADC_OSR_GAIN_SHIFT_0, ES8375_ADC_OSR_GAIN_MAX, 0,
++			es8375_adc_osr_gain_tlv),
++	SOC_SINGLE("ADC Invert Switch", ES8375_ADC1, ADC_INV_SHIFT_6, 1, 0),
++	SOC_SINGLE("ADC RAM Clear", ES8375_ADC1, ADC_RAMCLR_SHIFT_5, 1, 0),
++	SOC_ENUM("DMIC Polarity", es8375_dmic_pol),
++	SOC_SINGLE_TLV("DMIC Volume", ES8375_ADC1,
++		DMIC_GAIN_SHIFT_2, ES8375_DMIC_GAIN_MAX,
++		0, es8375_adc_dmic_volume_tlv),
++	SOC_ENUM("ADC Ramp Rate", es8375_adc_ramprate),
++	SOC_SINGLE_TLV("ADC Volume", ES8375_ADC_VOLUME,
++			ADC_VOLUME_SHIFT_0, ES8375_ADC_VOLUME_MAX,
++			0, es8375_adc_volume_tlv),
++	SOC_SINGLE("ADC Automute Switch", ES8375_ADC_AUTOMUTE,
++			ADC_AUTOMUTE_SHIFT_7, 1, 0),
++	SOC_ENUM("ADC Automute Winsize", es8375_adc_automute_ws),
++	SOC_SINGLE_TLV("ADC Automute Noise Gate", ES8375_ADC_AUTOMUTE,
++		ADC_AUTOMUTE_NG_SHIFT_0, ES8375_AUTOMUTE_NG_MAX,
++		0, es8375_automute_ng_tlv),
++	SOC_SINGLE_TLV("ADC Automute Volume", ES8375_ADC_AUTOMUTE_ATTN,
++			ADC_AUTOMUTE_ATTN_SHIFT_0, ES8375_ADC_AUTOMUTE_ATTN_MAX,
++			0, es8375_adc_automute_attn_tlv),
++	SOC_ENUM("ADC HPF", es8375_adc_hpf),
++
++	SOC_SINGLE("DAC DSM Mute Switch", ES8375_DAC1, DAC_DSMMUTE_SHIFT_7, 1, 0),
++	SOC_SINGLE("DAC DEM Mute Switch", ES8375_DAC1, DAC_DEMMUTE_SHIFT_6, 1, 0),
++	SOC_SINGLE("DAC Invert Switch", ES8375_DAC1, DAC_INV_SHIFT_5, 1, 0),
++	SOC_SINGLE("DAC RAM Clear", ES8375_DAC1, DAC_RAMCLR_SHIFT_4, 1, 0),
++	SOC_ENUM("DAC Ramp Rate", es8375_dac_ramprate),
++	SOC_SINGLE_TLV("DAC Volume", ES8375_DAC_VOLUME,
++			DAC_VOLUME_SHIFT_0, ES8375_DAC_VOLUME_MAX,
++			0, es8375_dac_volume_tlv),
++	SOC_SINGLE_TLV("DAC VPP Scale", ES8375_DAC_VPPSCALE,
++			DAC_VPPSCALE_SHIFT_0, ES8375_DAC_VPPSCALE_MAX,
++			0, es8375_dac_vppscale_tlv),
++	SOC_SINGLE("DAC Automute Switch", ES8375_DAC_AUTOMUTE1,
++			DAC_AUTOMUTE_EN_SHIFT_7, 1, 0),
++	SOC_SINGLE_TLV("DAC Automute Noise Gate", ES8375_DAC_AUTOMUTE1,
++		DAC_AUTOMUTE_NG_SHIFT_0, ES8375_AUTOMUTE_NG_MAX,
++		0, es8375_automute_ng_tlv),
++	SOC_ENUM("DAC Automute Winsize", es8375_dac_automute_ws),
++	SOC_SINGLE_TLV("DAC Automute Volume", ES8375_DAC_AUTOMUTE,
++			DAC_AUTOMUTE_ATTN_SHIFT_0, ES8375_DAC_AUTOMUTE_ATTN_MAX,
++			0, es8375_dac_automute_attn_tlv),
++};
++
++static const struct snd_soc_dapm_widget es8375_dapm_widgets[] = {
++	SND_SOC_DAPM_INPUT("MIC1"),
++	SND_SOC_DAPM_INPUT("DMIC"),
++	SND_SOC_DAPM_PGA("PGA", SND_SOC_NOPM, 0, 0, NULL, 0),
++	SND_SOC_DAPM_ADC("Mono ADC", NULL, SND_SOC_NOPM, 0, 0),
++	SND_SOC_DAPM_AIF_OUT("AIF1TX", "AIF1 Capture", 0, ES8375_SDP2,
++			ES8375_ADC_P2S_MUTE_SHIFT_5, 1),
++
++	SND_SOC_DAPM_MUX("ADC MUX", SND_SOC_NOPM, 0, 0, &es8375_dmic_mux_controls),
++
++	SND_SOC_DAPM_AIF_IN("AIF1RX", "AIF1 Playback", 0, ES8375_SDP,
++		SND_SOC_NOPM, 0),
++	SND_SOC_DAPM_DAC("Mono DAC", NULL, SND_SOC_NOPM, 0, 0),
++	SND_SOC_DAPM_OUTPUT("OUT"),
++};
++
++static const struct snd_soc_dapm_route es8375_dapm_routes[] = {
++	{"ADC MUX", "AMIC", "MIC1"},
++	{"ADC MUX", "DMIC", "DMIC"},
++	{"PGA", NULL, "ADC MUX"},
++	{"Mono ADC", NULL, "PGA"},
++	{"AIF1TX", NULL, "Mono ADC"},
++
++	{"Mono DAC", NULL, "AIF1RX"},
++	{"OUT", NULL, "Mono DAC"},
++};
++
++struct _coeff_div {
++	u16 mclk_lrck_ratio;
++	u32 mclk;
++	u32 rate;
++	u8 Reg0x04;
++	u8 Reg0x05;
++	u8 Reg0x06;
++	u8 Reg0x07;
++	u8 Reg0x08;
++	u8 Reg0x09;
++	u8 Reg0x0A;
++	u8 Reg0x0B;
++	u8 Reg0x19;
++	u8 dvdd_vol;
++	u8 dmic_sel;
++};
++
++static const struct _coeff_div coeff_div[] = {
++	{32, 256000, 8000, 0x05, 0x34, 0xDD, 0x55, 0x1F, 0x00, 0x95, 0x00, 0x1F, 2, 2},
++	{32, 512000, 16000, 0x05, 0x34, 0xDD, 0x55, 0x1F, 0x00, 0x94, 0x00, 0x1F, 2, 2},
++	{32, 1536000, 48000, 0x05, 0x33, 0xD5, 0x55, 0x1F, 0x00, 0x93, 0x00, 0x1F, 2, 2},
++	{36, 288000, 8000, 0x05, 0x34, 0xDD, 0x55, 0x23, 0x08, 0x95, 0x00, 0x1F, 2, 2},
++	{36, 576000, 16000, 0x05, 0x34, 0xDD, 0x55, 0x23, 0x08, 0x94, 0x00, 0x1F, 2, 2},
++	{36, 1728000, 48000, 0x05, 0x33, 0xD5, 0x55, 0x23, 0x08, 0x93, 0x00, 0x1F, 2, 2},
++	{48, 384000, 8000, 0x05, 0x14, 0x5D, 0x55, 0x17, 0x20, 0x94, 0x00, 0x28, 2, 2},
++	{48, 768000, 16000, 0x05, 0x14, 0x5D, 0x55, 0x17, 0x20, 0x94, 0x00, 0x28, 2, 2},
++	{48, 2304000, 48000, 0x05, 0x11, 0x53, 0x55, 0x17, 0x20, 0x92, 0x00, 0x28, 2, 2},
++	{50, 400000, 8000, 0x05, 0x14, 0x5D, 0x55, 0x18, 0x24, 0x94, 0x00, 0x27, 2, 2},
++	{50, 800000, 16000, 0x05, 0x14, 0x5D, 0x55, 0x18, 0x24, 0x94, 0x00, 0x27, 2, 2},
++	{50, 2400000, 48000, 0x05, 0x11, 0x53, 0x55, 0x18, 0x24, 0x92, 0x00, 0x27, 2, 2},
++	{64, 512000, 8000, 0x05, 0x14, 0x5D, 0x33, 0x1F, 0x00, 0x94, 0x00, 0x1F, 2, 2},
++	{64, 1024000, 16000, 0x05, 0x13, 0x55, 0x33, 0x1F, 0x00, 0x93, 0x00, 0x1F, 2, 2},
++	{64, 3072000, 48000, 0x05, 0x11, 0x53, 0x33, 0x1F, 0x00, 0x92, 0x00, 0x1F, 2, 2},
++	{72, 576000, 8000, 0x05, 0x14, 0x5D, 0x33, 0x23, 0x08, 0x94, 0x00, 0x1F, 2, 2},
++	{72, 1152000, 16000, 0x05, 0x13, 0x55, 0x33, 0x23, 0x08, 0x93, 0x00, 0x1F, 2, 2},
++	{72, 3456000, 48000, 0x05, 0x11, 0x53, 0x33, 0x23, 0x08, 0x92, 0x00, 0x1F, 2, 2},
++	{96, 768000, 8000, 0x15, 0x34, 0xDD, 0x55, 0x1F, 0x00, 0x94, 0x00, 0x1F, 2, 2},
++	{96, 1536000, 16000, 0x15, 0x34, 0xDD, 0x55, 0x1F, 0x00, 0x93, 0x00, 0x1F, 2, 2},
++	{96, 4608000, 48000, 0x15, 0x33, 0xD5, 0x55, 0x1F, 0x00, 0x92, 0x00, 0x1F, 2, 2},
++	{100, 800000, 8000, 0x05, 0x03, 0x35, 0x33, 0x18, 0x24, 0x94, 0x00, 0x27, 2, 2},
++	{100, 1600000, 16000, 0x05, 0x03, 0x35, 0x33, 0x18, 0x24, 0x93, 0x00, 0x27, 2, 2},
++	{100, 4800000, 48000, 0x03, 0x00, 0x31, 0x33, 0x18, 0x24, 0x92, 0x00, 0x27, 2, 2},
++	{128, 1024000, 8000, 0x05, 0x03, 0x35, 0x11, 0x1F, 0x00, 0x93, 0x01, 0x1F, 2, 2},
++	{128, 2048000, 16000, 0x03, 0x01, 0x33, 0x11, 0x1F, 0x00, 0x92, 0x01, 0x1F, 2, 2},
++	{128, 6144000, 48000, 0x03, 0x00, 0x31, 0x11, 0x1F, 0x00, 0x92, 0x01, 0x1F, 2, 2},
++	{144, 1152000, 8000, 0x05, 0x03, 0x35, 0x11, 0x23, 0x08, 0x93, 0x01, 0x1F, 2, 2},
++	{144, 2304000, 16000, 0x03, 0x01, 0x33, 0x11, 0x23, 0x08, 0x92, 0x01, 0x1F, 2, 2},
++	{144, 6912000, 48000, 0x03, 0x00, 0x31, 0x11, 0x23, 0x08, 0x92, 0x01, 0x1F, 2, 2},
++	{192, 1536000, 8000, 0x15, 0x14, 0x5D, 0x33, 0x1F, 0x00, 0x93, 0x02, 0x1F, 2, 2},
++	{192, 3072000, 16000, 0x15, 0x13, 0x55, 0x33, 0x1F, 0x00, 0x92, 0x02, 0x1F, 2, 2},
++	{192, 9216000, 48000, 0x15, 0x11, 0x53, 0x33, 0x1F, 0x00, 0x92, 0x02, 0x1F, 2, 2},
++	{250, 12000000, 48000, 0x25, 0x11, 0x53, 0x55, 0x18, 0x24, 0x92, 0x04, 0x27, 2, 2},
++	{256, 2048000, 8000, 0x0D, 0x03, 0x35, 0x11, 0x1F, 0x00, 0x92, 0x03, 0x1F, 2, 2},
++	{256, 4096000, 16000, 0x0B, 0x01, 0x33, 0x11, 0x1F, 0x00, 0x92, 0x03, 0x1F, 2, 2},
++	{256, 12288000, 48000, 0x0B, 0x00, 0x31, 0x11, 0x1F, 0x00, 0x92, 0x03, 0x1F, 2, 2},
++	{384, 3072000, 8000, 0x15, 0x03, 0x35, 0x11, 0x1F, 0x00, 0x92, 0x05, 0x1F, 2, 2},
++	{384, 6144000, 16000, 0x13, 0x01, 0x33, 0x11, 0x1F, 0x00, 0x92, 0x05, 0x1F, 2, 2},
++	{384, 18432000, 48000, 0x13, 0x00, 0x31, 0x11, 0x1F, 0x00, 0x92, 0x05, 0x1F, 2, 2},
++	{400, 19200000, 48000, 0x1B, 0x00, 0x31, 0x33, 0x18, 0x24, 0x92, 0x04, 0x27, 2, 2},
++	{500, 24000000, 48000, 0x23, 0x00, 0x31, 0x33, 0x18, 0x24, 0x92, 0x04, 0x27, 2, 2},
++	{512, 4096000, 8000, 0x1D, 0x03, 0x35, 0x11, 0x1F, 0x00, 0x92, 0x07, 0x1F, 2, 2},
++	{512, 8192000, 16000, 0x1B, 0x01, 0x33, 0x11, 0x1F, 0x00, 0x92, 0x07, 0x1F, 2, 2},
++	{512, 24576000, 48000, 0x1B, 0x00, 0x31, 0x11, 0x1F, 0x00, 0x92, 0x07, 0x1F, 2, 2},
++	{768, 6144000, 8000, 0x2D, 0x03, 0x35, 0x11, 0x1F, 0x00, 0x92, 0x0B, 0x1F, 2, 2},
++	{768, 12288000, 16000, 0x2B, 0x01, 0x33, 0x11, 0x1F, 0x00, 0x92, 0x0B, 0x1F, 2, 2},
++	{1024, 8192000, 8000, 0x3D, 0x03, 0x35, 0x11, 0x1F, 0x00, 0x92, 0x0F, 0x1F, 2, 2},
++	{1024, 16384000, 16000, 0x3B, 0x01, 0x33, 0x11, 0x1F, 0x00, 0x92, 0x0F, 0x1F, 2, 2},
++	{1152, 9216000, 8000, 0x45, 0x03, 0x35, 0x11, 0x1F, 0x00, 0x92, 0x0F, 0x1F, 2, 2},
++	{1152, 18432000, 16000, 0x43, 0x01, 0x33, 0x11, 0x1F, 0x00, 0x92, 0x0F, 0x1F, 2, 2},
++	{1200, 9600000, 8000, 0x5D, 0x03, 0x35, 0x33, 0x18, 0x24, 0x92, 0x11, 0x27, 2, 2},
++	{1200, 19200000, 16000, 0x5D, 0x03, 0x35, 0x33, 0x18, 0x24, 0x92, 0x11, 0x27, 2, 2},
++	{1536, 12288000, 8000, 0x5D, 0x03, 0x35, 0x11, 0x1F, 0x00, 0x92, 0x17, 0x1F, 2, 2},
++	{1536, 24576000, 16000, 0x5B, 0x01, 0x33, 0x11, 0x1F, 0x00, 0x92, 0x17, 0x1F, 2, 2},
++	{2048, 16384000, 8000, 0x7D, 0x03, 0x35, 0x11, 0x1F, 0x00, 0x92, 0x1F, 0x1F, 2, 2},
++	{2304, 18432000, 8000, 0x8D, 0x03, 0x35, 0x11, 0x1F, 0x00, 0x92, 0x23, 0x1F, 2, 2},
++	{2400, 19200000, 8000, 0xBD, 0x03, 0x35, 0x33, 0x18, 0x24, 0x92, 0x25, 0x27, 2, 2},
++	{3072, 24576000, 8000, 0xBD, 0x03, 0x35, 0x11, 0x1F, 0x00, 0x92, 0x2F, 0x1F, 2, 2},
++	{32, 3072000, 96000, 0x05, 0x11, 0x53, 0x55, 0x0F, 0x00, 0x92, 0x00, 0x37, 2, 2},
++	{64, 6144000, 96000, 0x03, 0x00, 0x31, 0x33, 0x0F, 0x00, 0x92, 0x00, 0x37, 2, 2},
++	{96, 9216000, 96000, 0x15, 0x11, 0x53, 0x55, 0x0F, 0x00, 0x92, 0x00, 0x37, 2, 2},
++	{128, 12288000, 96000, 0x0B, 0x00, 0x31, 0x33, 0x0F, 0x00, 0x92, 0x01, 0x37, 2, 2},
++};
++
++static inline int get_coeff(u8 vddd, u8 dmic, int mclk, int rate)
++{
++	int i;
++	u8 dmic_det, vddd_det;
++
++	for (i = 0; i < ARRAY_SIZE(coeff_div); i++) {
++		if (coeff_div[i].rate == rate && coeff_div[i].mclk == mclk) {
++			vddd_det = ~(coeff_div[i].dvdd_vol ^ vddd) & 0x01;
++			dmic_det = ~(coeff_div[i].dmic_sel ^ dmic) & 0x01;
++			vddd_det |= ~(coeff_div[i].dvdd_vol % 2) & 0x01;
++			dmic_det |= ~(coeff_div[i].dmic_sel % 2) & 0x01;
++
++			if (vddd_det && dmic_det)
++				return i;
++		}
++	}
++
++	return -EINVAL;
++}
++
++static int es8375_hw_params(struct snd_pcm_substream *substream,
++		struct snd_pcm_hw_params *params, struct snd_soc_dai *dai)
++{
++	struct snd_soc_component *component = dai->component;
++	struct es8375_priv *es8375 = snd_soc_component_get_drvdata(component);
++	int par_width = params_width(params);
++	u8 dmic_enable, iface = 0;
++	unsigned int regv;
++	int coeff, ret;
++
++	if (es8375->mclk_src == ES8375_BCLK_PIN) {
++		regmap_update_bits(es8375->regmap,
++				ES8375_MCLK_SEL, 0x80, 0x80);
++
++		es8375->mclk_freq = 2 * (unsigned int)par_width * params_rate(params);
++	}
++
++	regmap_read(es8375->regmap, ES8375_ADC1, &regv);
++	dmic_enable = regv >> 7 & 0x01;
++
++	ret = regulator_get_voltage(es8375->core_supply[ES8375_SUPPLY_VD].consumer);
++	switch (ret) {
++	case 1800000 ... 2000000:
++		es8375->vddd = ES8375_1V8;
++		break;
++	case 2500000 ... 3300000:
++		es8375->vddd = ES8375_3V3;
++		break;
++	default:
++		es8375->vddd = ES8375_3V3;
++		break;
++	}
++
++	coeff = get_coeff(es8375->vddd, dmic_enable, es8375->mclk_freq, params_rate(params));
++	if (coeff < 0) {
++		dev_warn(component->dev, "Clock coefficients do not match");
++	}
++	regmap_write(es8375->regmap, ES8375_CLK_MGR4,
++			coeff_div[coeff].Reg0x04);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR5,
++			coeff_div[coeff].Reg0x05);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR6,
++			coeff_div[coeff].Reg0x06);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR7,
++			coeff_div[coeff].Reg0x07);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR8,
++			coeff_div[coeff].Reg0x08);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR9,
++			coeff_div[coeff].Reg0x09);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR10,
++			coeff_div[coeff].Reg0x0A);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR11,
++			coeff_div[coeff].Reg0x0B);
++	regmap_write(es8375->regmap, ES8375_ADC_OSR_GAIN,
++			coeff_div[coeff].Reg0x19);
++
++	switch (params_format(params)) {
++	case SNDRV_PCM_FORMAT_S16_LE:
++		iface |= 0x0c;
++		break;
++	case SNDRV_PCM_FORMAT_S20_3LE:
++		iface |= 0x04;
++		break;
++	case SNDRV_PCM_FORMAT_S24_LE:
++		break;
++	case SNDRV_PCM_FORMAT_S32_LE:
++		iface |= 0x10;
++		break;
++	}
++
++	regmap_update_bits(es8375->regmap, ES8375_SDP, 0x1c, iface);
++
++	return 0;
++}
++
++static int es8375_set_sysclk(struct snd_soc_dai *dai, int clk_id,
++		unsigned int freq, int dir)
++{
++	struct snd_soc_component *component = dai->component;
++	struct es8375_priv *es8375 = snd_soc_component_get_drvdata(component);
++
++	es8375->mclk_freq = freq;
++
++	return 0;
++}
++
++static int es8375_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
++{
++	struct snd_soc_component *component = dai->component;
++	struct es8375_priv *es8375 = snd_soc_component_get_drvdata(component);
++	unsigned int iface, codeciface;
++
++	regmap_read(es8375->regmap, ES8375_SDP, &codeciface);
++
++	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
++	case SND_SOC_DAIFMT_CBM_CFM:
++		es8375->mastermode = 1;
++		regmap_update_bits(es8375->regmap, ES8375_RESET1,
++				0x80, 0x80);
++		break;
++	case SND_SOC_DAIFMT_CBS_CFS:
++		es8375->mastermode = 0;
++		regmap_update_bits(es8375->regmap, ES8375_RESET1,
++				0x80, 0x00);
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
++	case SND_SOC_DAIFMT_I2S:
++		codeciface &= 0xFC;
++		break;
++	case SND_SOC_DAIFMT_RIGHT_J:
++		return -EINVAL;
++	case SND_SOC_DAIFMT_LEFT_J:
++		codeciface &= 0xFC;
++		codeciface |= 0x01;
++		break;
++	case SND_SOC_DAIFMT_DSP_A:
++		codeciface &= 0xDC;
++		codeciface |= 0x03;
++		break;
++	case SND_SOC_DAIFMT_DSP_B:
++		codeciface &= 0xDC;
++		codeciface |= 0x23;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	regmap_read(es8375->regmap, ES8375_CLK_MGR3, &iface);
++
++	switch (fmt & SND_SOC_DAIFMT_INV_MASK) {
++	case SND_SOC_DAIFMT_NB_NF:
++		iface      &= 0xFE;
++		codeciface &= 0xDF;
++		break;
++	case SND_SOC_DAIFMT_IB_IF:
++		iface      |= 0x01;
++		codeciface |= 0x20;
++		break;
++	case SND_SOC_DAIFMT_IB_NF:
++		iface      |= 0x01;
++		codeciface &= 0xDF;
++		break;
++	case SND_SOC_DAIFMT_NB_IF:
++		iface      &= 0xFE;
++		codeciface |= 0x20;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	regmap_write(es8375->regmap, ES8375_CLK_MGR3, iface);
++	regmap_write(es8375->regmap, ES8375_SDP, codeciface);
++
++	return 0;
++}
++
++static int es8375_set_bias_level(struct snd_soc_component *component,
++		enum snd_soc_bias_level level)
++{
++	struct es8375_priv *es8375 = snd_soc_component_get_drvdata(component);
++	int ret;
++
++	switch (level) {
++	case SND_SOC_BIAS_ON:
++		ret = clk_prepare_enable(es8375->mclk);
++		if (ret) {
++			dev_err(component->dev, "unable to prepare mclk\n");
++			return  ret;
++		}
++		regmap_write(es8375->regmap, ES8375_CSM1, 0xA6);
++		break;
++	case SND_SOC_BIAS_PREPARE:
++		break;
++	case SND_SOC_BIAS_STANDBY:
++		regmap_write(es8375->regmap, ES8375_CSM1, 0x96);
++		clk_disable_unprepare(es8375->mclk);
++		break;
++	case SND_SOC_BIAS_OFF:
++		break;
++	}
++	return 0;
++}
++
++static int es8375_mute(struct snd_soc_dai *dai, int mute, int stream)
++{
++	struct snd_soc_component *component = dai->component;
++	struct es8375_priv *es8375 = snd_soc_component_get_drvdata(component);
++
++	if (mute) {
++		if (stream == SNDRV_PCM_STREAM_PLAYBACK)
++			regmap_update_bits(es8375->regmap, ES8375_SDP, 0x40, 0x40);
++		else
++			regmap_update_bits(es8375->regmap, ES8375_SDP2, 0x20, 0x20);
++	} else {
++		if (stream == SNDRV_PCM_STREAM_PLAYBACK)
++			regmap_update_bits(es8375->regmap, ES8375_SDP, 0x40, 0x00);
++		else
++			regmap_update_bits(es8375->regmap, ES8375_SDP2, 0x20, 0x00);
++	}
++
++	return 0;
++}
++
++#define es8375_RATES SNDRV_PCM_RATE_8000_96000
++
++#define es8375_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE |\
++		SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S24_3LE | SNDRV_PCM_FMTBIT_S32_LE)
++
++static const struct snd_soc_dai_ops es8375_ops = {
++	.hw_params = es8375_hw_params,
++	.mute_stream = es8375_mute,
++	.set_sysclk = es8375_set_sysclk,
++	.set_fmt = es8375_set_dai_fmt,
++};
++
++static struct snd_soc_dai_driver es8375_dai = {
++	.name = "ES8375 HiFi",
++	.playback = {
++		.stream_name = "AIF1 Playback",
++		.channels_min = 1,
++		.channels_max = 2,
++		.rates = es8375_RATES,
++		.formats = es8375_FORMATS,
++	},
++	.capture = {
++		.stream_name = "AIF1 Capture",
++		.channels_min = 1,
++		.channels_max = 2,
++		.rates = es8375_RATES,
++		.formats = es8375_FORMATS,
++	},
++	.ops = &es8375_ops,
++	.symmetric_rate = 1,
++};
++
++static void es8375_init(struct snd_soc_component *component)
++{
++	struct es8375_priv *es8375 = snd_soc_component_get_drvdata(component);
++
++	regmap_write(es8375->regmap, ES8375_CLK_MGR10, 0x95);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR3, 0x48);
++	regmap_write(es8375->regmap, ES8375_DIV_SPKCLK, 0x18);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR4, 0x02);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR5, 0x05);
++	regmap_write(es8375->regmap, ES8375_CSM1, 0x82);
++	regmap_write(es8375->regmap, ES8375_VMID_CHARGE2, 0x20);
++	regmap_write(es8375->regmap, ES8375_VMID_CHARGE3, 0x20);
++	regmap_write(es8375->regmap, ES8375_DAC_CAL, 0x28);
++	regmap_write(es8375->regmap, ES8375_ANALOG_SPK1, 0xFC);
++	regmap_write(es8375->regmap, ES8375_ANALOG_SPK2, 0xE0);
++	regmap_write(es8375->regmap, ES8375_VMID_SEL, 0xFE);
++	regmap_write(es8375->regmap, ES8375_ANALOG1, 0xB8);
++	regmap_write(es8375->regmap, ES8375_SYS_CTRL2, 0x03);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR2, 0x16);
++	regmap_write(es8375->regmap, ES8375_RESET1, 0x00);
++	msleep(80);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR3, 0x00);
++	regmap_write(es8375->regmap, ES8375_CSM1, 0x86);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR4, 0x0B);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR5, 0x00);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR6, 0x31);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR7, 0x11);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR8, 0x1F);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR9, 0x00);
++	regmap_write(es8375->regmap, ES8375_ADC_OSR_GAIN, 0x1F);
++	regmap_write(es8375->regmap, ES8375_ADC2, 0x00);
++	regmap_write(es8375->regmap, ES8375_DAC2, 0x00);
++	regmap_write(es8375->regmap, ES8375_DAC_OTP, 0x88);
++	regmap_write(es8375->regmap, ES8375_ANALOG_SPK2, 0xE7);
++	regmap_write(es8375->regmap, ES8375_ANALOG2, 0xF0);
++	regmap_write(es8375->regmap, ES8375_ANALOG3, 0x40);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR2, 0xFE);
++
++	regmap_update_bits(es8375->regmap, ES8375_SDP, 0x40, 0x40);
++	regmap_update_bits(es8375->regmap, ES8375_SDP2, 0x20, 0x20);
++}
++
++static int es8375_suspend(struct snd_soc_component *component)
++{
++	struct es8375_priv *es8375 = snd_soc_component_get_drvdata(component);
++
++	regmap_write(es8375->regmap, ES8375_CSM1, 0x96);
++	regcache_cache_only(es8375->regmap, true);
++	regcache_mark_dirty(es8375->regmap);
++	return 0;
++}
++
++static int es8375_resume(struct snd_soc_component *component)
++{
++	struct es8375_priv *es8375 = snd_soc_component_get_drvdata(component);
++	unsigned int reg;
++
++	regcache_cache_only(es8375->regmap, false);
++	regcache_cache_bypass(es8375->regmap, true);
++	regmap_read(es8375->regmap, ES8375_CLK_MGR2, &reg);
++	regcache_cache_bypass(es8375->regmap, false);
++
++	if (reg == 0x00)
++		es8375_init(component);
++	else
++		es8375_set_bias_level(component, SND_SOC_BIAS_ON);
++
++	regcache_sync(es8375->regmap);
++
++	return 0;
++}
++
++static int es8375_component_probe(struct snd_soc_component *component)
++{
++	struct es8375_priv *es8375 = snd_soc_component_get_drvdata(component);
++
++	es8375->mastermode = 0;
++
++	es8375_init(component);
++
++	return 0;
++}
++
++static bool es8375_writeable_register(struct device *dev, unsigned int reg)
++{
++	switch (reg) {
++	case ES8375_CHIP_VERSION:
++	case ES8375_CHIP_ID0:
++	case ES8375_CHIP_ID1:
++	case ES8375_SPK_OFFSET:
++	case ES8375_FLAGS2:
++		return false;
++	default:
++		return true;
++	}
++}
++
++static struct regmap_config es8375_regmap_config = {
++	.reg_bits = 8,
++	.val_bits = 8,
++	.max_register = ES8375_REG_MAX,
++	.cache_type = REGCACHE_RBTREE,
++	.use_single_read = true,
++	.writeable_reg = es8375_writeable_register,
++};
++
++static struct snd_soc_component_driver es8375_codec_driver = {
++	.probe = es8375_component_probe,
++	.suspend = es8375_suspend,
++	.resume = es8375_resume,
++	.set_bias_level = es8375_set_bias_level,
++	.controls = es8375_snd_controls,
++	.num_controls = ARRAY_SIZE(es8375_snd_controls),
++	.dapm_widgets = es8375_dapm_widgets,
++	.num_dapm_widgets = ARRAY_SIZE(es8375_dapm_widgets),
++	.dapm_routes = es8375_dapm_routes,
++	.num_dapm_routes = ARRAY_SIZE(es8375_dapm_routes),
++
++	.use_pmdown_time = 0,
++	.idle_bias_on = 0,
++	.suspend_bias_off = 1,
++};
++
++static int es8375_read_device_properities(struct device *dev, struct es8375_priv *es8375)
++{
++	int ret, i;
++
++	ret = device_property_read_u8(dev, "everest,mclk-src", &es8375->mclk_src);
++	if (ret != 0)
++		es8375->mclk_src = ES8375_MCLK_SOURCE;
++	dev_dbg(dev, "mclk-src %x", es8375->mclk_src);
++
++	for (i = 0; i < ARRAY_SIZE(es8375_core_supplies); i++)
++		es8375->core_supply[i].supply = es8375_core_supplies[i];
++	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(es8375_core_supplies), es8375->core_supply);
++	if (ret) {
++		dev_err(dev, "Failed to request core supplies %d\n", ret);
++		return ret;
++	}
++
++	es8375->mclk = devm_clk_get(dev, "mclk");
++	if (IS_ERR(es8375->mclk)) {
++		dev_err(dev, "unable to get mclk\n");
++		return PTR_ERR(es8375->mclk);
++	}
++
++	if (!es8375->mclk)
++		dev_warn(dev, "assuming static mclk\n");
++
++	ret = clk_prepare_enable(es8375->mclk);
++	if (ret) {
++		dev_err(dev, "unable to enable mclk\n");
++		return ret;
++	}
++	ret = regulator_bulk_enable(ARRAY_SIZE(es8375_core_supplies), es8375->core_supply);
++	if (ret) {
++		dev_err(dev, "Failed to enable core supplies: %d\n", ret);
++		clk_disable_unprepare(es8375->mclk);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int es8375_i2c_probe(struct i2c_client *i2c_client, const struct i2c_device_id *id)
++{
++	struct es8375_priv *es8375;
++	struct device *dev = &i2c_client->dev;
++	int ret;
++	unsigned int val;
++
++	es8375 = devm_kzalloc(&i2c_client->dev, sizeof(*es8375), GFP_KERNEL);
++	if (!es8375)
++		return -ENOMEM;
++
++	es8375->regmap = devm_regmap_init_i2c(i2c_client,
++			&es8375_regmap_config);
++	if (IS_ERR(es8375->regmap)) {
++		dev_err(&i2c_client->dev, "regmap_init() failed: %d\n", ret);
++		return PTR_ERR(es8375->regmap);
++	}
++
++	i2c_set_clientdata(i2c_client, es8375);
++
++	ret = regmap_read(es8375->regmap, ES8375_CHIP_ID1, &val);
++	if (ret < 0) {
++		dev_err(&i2c_client->dev, "failed to read i2c at addr %X\n",
++				i2c_client->addr);
++		return ret;
++	}
++
++	if (val != 0x83) {
++		dev_err(&i2c_client->dev, "device at addr %X is not an es8375\n",
++				i2c_client->addr);
++		return -ENODEV;
++	}
++
++	ret = regmap_read(es8375->regmap, ES8375_CHIP_ID0, &val);
++	if (val != 0x75) {
++		dev_err(&i2c_client->dev, "device at addr %X is not an es8375\n",
++				i2c_client->addr);
++		return -ENODEV;
++	}
++
++	ret = es8375_read_device_properities(dev, es8375);
++	if (ret != 0) {
++		dev_err(&i2c_client->dev, "get an error from dts info %X\n", ret);
++		return ret;
++	}
++
++	return snd_soc_register_component(&i2c_client->dev, &es8375_codec_driver,
++			&es8375_dai, 1);
++}
++
++static void es8375_i2c_shutdown(struct i2c_client *i2c)
++{
++	struct es8375_priv *es8375;
++
++	es8375 = i2c_get_clientdata(i2c);
++
++	regmap_write(es8375->regmap, ES8375_CSM1, 0x3C);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR3, 0x48);
++	regmap_write(es8375->regmap, ES8375_CSM2, 0x80);
++	regmap_write(es8375->regmap, ES8375_CSM1, 0x3E);
++	regmap_write(es8375->regmap, ES8375_CLK_MGR10, 0x15);
++	regmap_write(es8375->regmap, ES8375_SYS_CTRL2, 0x0C);
++	regmap_write(es8375->regmap, ES8375_RESET1, 0x00);
++	regmap_write(es8375->regmap, ES8375_CSM2, 0x00);
++
++	regulator_bulk_disable(ARRAY_SIZE(es8375_core_supplies), es8375->core_supply);
++	clk_disable_unprepare(es8375->mclk);
++}
++
++static const struct i2c_device_id es8375_id[] = {
++	{"es8375"},
++	{ }
++};
++MODULE_DEVICE_TABLE(i2c, es8375_id);
++
++#ifdef CONFIG_ACPI
++static const struct acpi_device_id es8375_acpi_match[] = {
++	{"ESSX8375", 0},
++	{},
++};
++
++MODULE_DEVICE_TABLE(acpi, es8375_acpi_match);
++#endif
++
++#ifdef CONFIG_OF
++static const struct of_device_id es8375_of_match[] = {
++	{.compatible = "everest,es8375",},
++	{}
++};
++
++MODULE_DEVICE_TABLE(of, es8375_of_match);
++#endif
++
++static struct i2c_driver es8375_i2c_driver = {
++	.driver = {
++		.name	= "es8375",
++		.of_match_table = of_match_ptr(es8375_of_match),
++		.acpi_match_table = ACPI_PTR(es8375_acpi_match),
++	},
++	.shutdown = es8375_i2c_shutdown,
++	.probe = es8375_i2c_probe,
++	.id_table = es8375_id,
++};
++module_i2c_driver(es8375_i2c_driver);
++
++MODULE_DESCRIPTION("ASoC ES8375 driver");
++MODULE_AUTHOR("Michael Zhang <zhangyi@everest-semi.com>");
++MODULE_LICENSE("GPL");
+diff --git a/sound/soc/codecs/es8375.h b/sound/soc/codecs/es8375.h
+new file mode 100644
+index 000000000..11e3ceec9
+--- /dev/null
++++ b/sound/soc/codecs/es8375.h
+@@ -0,0 +1,123 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++* ES8375.h  --  ES8375 ALSA SoC Audio Codec
++*
++* Authors:
++*
++* Based on ES8375.h by Michael Zhang
++*/
++#ifndef _ES8375_H
++#define _ES8375_H
++
++// Registors
++#define ES8375_RESET1              0x00
++#define ES8375_MCLK_SEL            0x01
++#define ES8375_CLK_MGR2            0x02
++#define ES8375_CLK_MGR3            0x03
++#define ES8375_CLK_MGR4            0x04
++#define ES8375_CLK_MGR5            0x05
++#define ES8375_CLK_MGR6            0x06
++#define ES8375_CLK_MGR7            0x07
++#define ES8375_CLK_MGR8            0x08
++#define ES8375_CLK_MGR9            0x09
++#define ES8375_CLK_MGR10           0x0A
++#define ES8375_CLK_MGR11           0x0B
++#define ES8375_CLK_MGR12           0x0C
++#define ES8375_DIV_SPKCLK          0x0E
++#define ES8375_CSM1                0x0F
++#define ES8375_CSM2                0x10
++#define ES8375_VMID_CHARGE2        0x11
++#define ES8375_VMID_CHARGE3        0x12
++#define ES8375_SDP                 0x15
++#define ES8375_SDP2                0x16
++#define ES8375_ADC1                0x17
++#define ES8375_ADC2                0x18
++#define ES8375_ADC_OSR_GAIN        0x19
++#define ES8375_ADC_VOLUME          0x1A
++#define ES8375_ADC_AUTOMUTE        0x1B
++#define ES8375_ADC_AUTOMUTE_ATTN   0x1C
++#define ES8375_HPF1                0x1D
++#define ES8375_DAC1                0x1F
++#define ES8375_DAC2                0x20
++#define ES8375_DAC_VOLUME          0x21
++#define ES8375_DAC_VPPSCALE        0x22
++#define ES8375_DAC_AUTOMUTE1       0x23
++#define ES8375_DAC_AUTOMUTE        0x24
++#define ES8375_DAC_CAL             0x25
++#define ES8375_DAC_OTP             0x27
++#define ES8375_ANALOG_SPK1         0x28
++#define ES8375_ANALOG_SPK2         0x29
++#define ES8375_VMID_SEL            0x2D
++#define ES8375_ANALOG1             0x2E
++#define ES8375_ANALOG2             0x32
++#define ES8375_ANALOG3             0x37
++#define ES8375_ADC2DAC_CLKTRI      0xF8
++#define ES8375_SYS_CTRL2           0xF9
++#define ES8375_FLAGS2              0xFB
++#define ES8375_SPK_OFFSET          0xFC
++#define ES8375_CHIP_ID1            0xFD
++#define ES8375_CHIP_ID0            0xFE
++#define ES8375_CHIP_VERSION        0xFF
++
++// Bit Shifts
++#define ADC_OSR_GAIN_SHIFT_0        0
++#define ADC_RAMPRATE_SHIFT_0        0
++#define ADC_VOLUME_SHIFT_0          0
++#define ADC_AUTOMUTE_NG_SHIFT_0     0
++#define ADC_AUTOMUTE_ATTN_SHIFT_0   0
++#define DAC_RAMPRATE_SHIFT_0        0
++#define DAC_VOLUME_SHIFT_0          0
++#define DAC_VPPSCALE_SHIFT_0        0
++#define DAC_AUTOMUTE_NG_SHIFT_0     0
++#define DAC_AUTOMUTE_ATTN_SHIFT_0   0
++#define DMIC_GAIN_SHIFT_2           2
++#define ADC_AUTOMUTE_WS_SHIFT_3     3
++#define DMIC_POL_SHIFT_4            4
++#define DAC_RAMCLR_SHIFT_4          4
++#define ES8375_EN_MODL_SHIFT_4      4
++#define ADC_RAMCLR_SHIFT_5          5
++#define ADC_HPF_SHIFT_5             5
++#define DAC_INV_SHIFT_5             5
++#define DAC_AUTOMUTE_WS_SHIFT_5     5
++#define ES8375_EN_PGAL_SHIFT_5      5
++#define ES8375_ADC_P2S_MUTE_SHIFT_5 5
++#define ADC_INV_SHIFT_6             6
++#define DAC_DEMMUTE_SHIFT_6         6
++#define ES8375_DAC_S2P_MUTE_SHIFT_6 6
++#define ADC_SRC_SHIFT_7             7
++#define ADC_AUTOMUTE_SHIFT_7        7
++#define DAC_DSMMUTE_SHIFT_7         7
++#define DAC_AUTOMUTE_EN_SHIFT_7     7
++
++// Function values
++#define ES8375_ADC_OSR_GAIN_MAX         0x3F
++#define ES8375_DMIC_GAIN_MAX            0x04
++#define ES8375_ADC_AUTOMUTE_ATTN_MAX    0x1F
++#define ES8375_AUTOMUTE_NG_MAX          0x07
++#define ES8375_ADC_VOLUME_MAX           0xFF
++#define ES8375_DAC_VOLUME_MAX           0xFF
++#define ES8375_DAC_VPPSCALE_MAX         0x3F
++#define ES8375_DAC_AUTOMUTE_ATTN_MAX    0x17
++#define ES8375_REG_MAX                  0xFF
++
++enum ES8375_supplies {
++	ES8375_SUPPLY_VD = 0,
++	ES8375_SUPPLY_VA,
++};
++
++// Properties
++#define ES8375_3V3  1
++#define ES8375_1V8  0
++
++#define ES8375_MCLK_PIN	0
++#define ES8375_BCLK_PIN 1
++#define ES8375_MCLK_SOURCE	ES8375_MCLK_PIN
++
++#define DMIC_POSITIVE_EDGE  0
++#define DMIC_NEGATIVE_EDGE  1
++#define DMIC_POL  DMIC_POSITIVE_EDGE
++
++#define PA_SHUTDOWN     0
++#define PA_ENABLE       1
++
++#endif
+diff --git a/sound/soc/codecs/es8389.c b/sound/soc/codecs/es8389.c
+new file mode 100644
+index 000000000..01f203648
+--- /dev/null
++++ b/sound/soc/codecs/es8389.c
+@@ -0,0 +1,999 @@
++/*
++ * es8389.c  --  ES8389/ES8390 ALSA SoC Audio Codec
++ *
++ * Copyright (C) 2024 Everest Semiconductor Co., Ltd
++ *
++ * Authors:  Michael Zhang (zhangyi@everest-semi.com)
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#include <linux/clk.h>
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/delay.h>
++#include <linux/i2c.h>
++#include <linux/regmap.h>
++#include <sound/core.h>
++#include <sound/pcm.h>
++#include <sound/pcm_params.h>
++#include <sound/tlv.h>
++#include <sound/soc.h>
++
++#include "es8389.h"
++
++
++/* codec private data */
++
++struct	es8389_private {
++	struct snd_soc_component *component;
++	struct regmap *regmap;
++	struct clk *mclk;
++	unsigned int sysclk;
++	int mastermode;
++
++	u8 adc_slot;
++	u8 dac_slot;
++	int dmic;
++	u8 mclk_src;
++	enum snd_soc_bias_level bias_level;
++};
++
++static bool es8389_volatile_register(struct device *dev,
++			unsigned int reg)
++{
++	if ((reg  <= 0xff))
++		return true;
++	else
++		return false;
++}
++
++static const DECLARE_TLV_DB_SCALE(dac_vol_tlv, -9550, 50, 0);
++static const DECLARE_TLV_DB_SCALE(adc_vol_tlv, -9550, 50, 0);
++static const DECLARE_TLV_DB_SCALE(pga_vol_tlv, 0, 300, 0);
++static const DECLARE_TLV_DB_SCALE(mix_vol_tlv, -9500, 100, 0);
++static const DECLARE_TLV_DB_SCALE(alc_target_tlv, -3200, 200, 0);
++static const DECLARE_TLV_DB_SCALE(alc_max_level, -3200, 200, 0);
++
++static const char *const alc[] = {
++	"ALC OFF",
++	"ADCR ALC ON",
++	"ADCL ALC ON",
++	"ADCL & ADCL ALC ON",
++};
++
++static const char *const ramprate[] = {
++	"0.125db/1  LRCK",
++	"0.125db/4  LRCK",
++	"0.125db/8  LRCK",
++	"0.125db/16  LRCK",
++	"0.125db/32  LRCK",
++	"0.125db/64  LRCK",
++	"0.125db/128  LRCK",
++	"0.125db/256  LRCK",
++	"0.125db/512  LRCK",
++	"0.125db/1024  LRCK",
++	"0.125db/2048  LRCK",
++	"0.125db/4096  LRCK",
++	"0.125db/8192  LRCK",
++	"0.125db/16384  LRCK",
++	"0.125db/32768  LRCK",
++	"0.125db/65536  LRCK",
++};
++
++static const char *const winsize[] = {
++	"2 LRCK",
++	"4  LRCK",
++	"8  LRCK",
++	"16  LRCK",
++	"32  LRCK",
++	"64  LRCK",
++	"128  LRCK",
++	"256  LRCK",
++	"512  LRCK",
++	"1024  LRCK",
++	"2048  LRCK",
++	"4096  LRCK",
++	"8192  LRCK",
++	"16384  LRCK",
++	"32768  LRCK",
++	"65536  LRCK",
++};
++
++static const struct soc_enum alc_enable =
++	SOC_ENUM_SINGLE(ES8389_ALC_ON_REG2B, 5, 4, alc);
++static const struct soc_enum alc_ramprate =
++	SOC_ENUM_SINGLE(ES8389_ALC_CTL_REG29, 4, 16, ramprate);
++static const struct soc_enum alc_winsize =
++	SOC_ENUM_SINGLE(ES8389_ALC_CTL_REG29, 0, 16, winsize);
++
++static const char *es8389_outl_mux_txt[] = {
++	"normal",
++	"DAC2 channel to DAC1 channel",
++};
++
++static const char *es8389_outr_mux_txt[] = {
++	"normal",
++	"DAC1 channel to DAC2 channel",
++};
++
++static const char *es8389_dmic_mux_txt[] = {
++	"AMIC",
++	"DMIC",
++};
++
++static const char *es8389_pga1_texts[] = {
++	"DifferentialL" , "Line 1P", "Line 2P" 
++};
++
++static const char *es8389_pga2_texts[] = {
++	"DifferentialR" , "Line 2N", "Line 1N" 
++};
++
++static const unsigned int es8389_out_mux_values[] = {
++	0, 1
++};
++
++static const unsigned int es8389_dmic_mux_values[] = {
++	0, 3
++};
++
++static const unsigned int es8389_pga_values[] = {
++	1, 5, 6
++};
++
++static const struct soc_enum es8389_outl_mux_enum =
++	SOC_VALUE_ENUM_SINGLE(ES8389_DAC_MIX_REG44, 5, 1, 
++			ARRAY_SIZE(es8389_outl_mux_txt), es8389_outl_mux_txt, 
++			es8389_out_mux_values);
++
++static const struct snd_kcontrol_new es8389_outl_mux_controls =
++	SOC_DAPM_ENUM("OUTL MUX", es8389_outl_mux_enum);
++
++static const struct soc_enum es8389_outr_mux_enum =
++	SOC_VALUE_ENUM_SINGLE(ES8389_DAC_MIX_REG44, 4, 1, 
++			ARRAY_SIZE(es8389_outr_mux_txt), es8389_outr_mux_txt, 
++			es8389_out_mux_values);
++
++static const struct snd_kcontrol_new es8389_outr_mux_controls =
++	SOC_DAPM_ENUM("OUTR MUX", es8389_outr_mux_enum);
++
++static const struct soc_enum es8389_dmic_mux_enum =
++	SOC_VALUE_ENUM_SINGLE(ES8389_DMIC_EN_REG6D, 6, 3, 
++			ARRAY_SIZE(es8389_dmic_mux_txt), es8389_dmic_mux_txt, 
++			es8389_dmic_mux_values);
++
++static const struct soc_enum es8389_pga_enum[] = {
++	SOC_VALUE_ENUM_SINGLE(ES8389_MIC1_GAIN_REG72, 4, 7, 
++			ARRAY_SIZE(es8389_pga1_texts), es8389_pga1_texts, 
++			es8389_pga_values),
++	SOC_VALUE_ENUM_SINGLE(ES8389_MIC2_GAIN_REG73, 4, 7, 
++			ARRAY_SIZE(es8389_pga2_texts), es8389_pga2_texts, 
++			es8389_pga_values),
++};
++
++static const struct snd_kcontrol_new es8389_dmic_mux_controls =
++	SOC_DAPM_ENUM("ADC MUX", es8389_dmic_mux_enum);
++
++static const struct snd_kcontrol_new es8389_left_mixer_controls[] = {
++	SOC_DAPM_SINGLE("DACR DACL Mixer", ES8389_DAC_MIX_REG44, 3, 1, 0),
++};
++
++static const struct snd_kcontrol_new es8389_right_mixer_controls[] = {
++	SOC_DAPM_SINGLE("DACL DACR Mixer", ES8389_DAC_MIX_REG44, 2, 1, 0),
++};
++
++
++static const struct snd_kcontrol_new es8389_adc_mixer_controls[] = {
++	SOC_DAPM_SINGLE("DACL ADCL Mixer", ES8389_ADC_RESET_REG31, 7, 1, 0),
++	SOC_DAPM_SINGLE("DACR ADCR Mixer", ES8389_ADC_RESET_REG31, 6, 1, 0),
++};
++
++static const struct snd_kcontrol_new es8389_snd_controls[] = {
++	SOC_SINGLE_TLV("ADCL Capture Volume", ES8389_ADCL_VOL_REG27, 0, 0xFF, 0, adc_vol_tlv),
++	SOC_SINGLE_TLV("ADCR Capture Volume", ES8389_ADCR_VOL_REG28, 0, 0xFF, 0, adc_vol_tlv),
++	SOC_SINGLE_TLV("ADCL PGA Volume", ES8389_MIC1_GAIN_REG72, 0, 0x0E, 0, pga_vol_tlv),
++	SOC_SINGLE_TLV("ADCR PGA Volume", ES8389_MIC2_GAIN_REG73, 0, 0x0E, 0, pga_vol_tlv),
++
++	SOC_ENUM("PGA1 Select", es8389_pga_enum[0]),
++	SOC_ENUM("PGA2 Select", es8389_pga_enum[1]),
++	SOC_ENUM("ALC Capture Switch", alc_enable),
++	SOC_SINGLE_TLV("ALC Capture Target Level", ES8389_ALC_TARGET_REG2C,
++			0, 0x0f, 0, alc_target_tlv),
++	SOC_SINGLE_TLV("ALC Capture Max Gain", ES8389_ALC_GAIN_REG2D,
++			0, 0x0f, 0, alc_max_level),
++	SOC_ENUM("ADC Ramp Rate", alc_ramprate),
++	SOC_ENUM("ALC Capture Winsize", alc_winsize),
++	SOC_DOUBLE("ADC OSR Volume ON", ES8389_ADC_MUTE_REG2F, 6, 7, 1, 0),
++	SOC_SINGLE_TLV("ADC OSR Volume", ES8389_OSR_VOL_REG26, 0, 0xFF, 0, adc_vol_tlv),
++	SOC_DOUBLE("ADC OUTPUT Invert", ES8389_ADC_HPF2_REG25, 5, 6, 1, 0),
++
++	SOC_SINGLE_TLV("DACL Playback Volume", ES8389_DACL_VOL_REG46, 0, 0xFF, 0, dac_vol_tlv),
++	SOC_SINGLE_TLV("DACR Playback Volume", ES8389_DACR_VOL_REG47, 0, 0xFF, 0, dac_vol_tlv),
++	SOC_DOUBLE("DAC OUTPUT Invert", ES8389_DAC_INV_REG45, 5, 6, 1, 0),
++	SOC_SINGLE_TLV("ADC2DAC Mixer Volume", ES8389_MIX_VOL_REG48, 0, 0x7F, 0, mix_vol_tlv),
++
++	SOC_SINGLE("Mix ADCR And DACR to DACR", ES8389_DAC_MIX_REG44, 0, 1, 0),
++	SOC_SINGLE("Mix ADCL And DACL to DACL", ES8389_DAC_MIX_REG44, 1, 1, 0),
++};
++
++static const struct snd_soc_dapm_widget es8389_dapm_widgets[] = {
++	/*Input Side*/
++	SND_SOC_DAPM_INPUT("INPUT1"),
++	SND_SOC_DAPM_INPUT("INPUT2"),
++	SND_SOC_DAPM_INPUT("DMIC"),
++	SND_SOC_DAPM_PGA("PGAL", SND_SOC_NOPM, 4, 0, NULL, 0),
++	SND_SOC_DAPM_PGA("PGAR", SND_SOC_NOPM, 4, 0, NULL, 0),
++
++	/*ADCs*/
++	SND_SOC_DAPM_ADC("ADCL", NULL, SND_SOC_NOPM, 0, 0),
++	SND_SOC_DAPM_ADC("ADCR", NULL, SND_SOC_NOPM, 0, 0),
++
++	/* Audio Interface */
++	SND_SOC_DAPM_AIF_OUT("I2S OUT", "I2S Capture", 0, SND_SOC_NOPM, 0, 0),
++	SND_SOC_DAPM_AIF_IN("I2S IN", "I2S Playback", 0, SND_SOC_NOPM, 0, 0),
++
++	/*DACs*/
++	SND_SOC_DAPM_DAC("DACL", NULL, SND_SOC_NOPM, 0, 0),
++	SND_SOC_DAPM_DAC("DACR", NULL, SND_SOC_NOPM, 0, 0),
++
++	/*Output Side*/
++	SND_SOC_DAPM_OUTPUT("HPOL"),
++	SND_SOC_DAPM_OUTPUT("HPOR"),
++
++	/* Digital Interface */
++	SND_SOC_DAPM_PGA("IF DAC", SND_SOC_NOPM, 0, 0, NULL, 0),
++	SND_SOC_DAPM_PGA("IF DACL1", SND_SOC_NOPM, 0, 0, NULL, 0),
++	SND_SOC_DAPM_PGA("IF DACR1", SND_SOC_NOPM, 0, 0, NULL, 0),
++	SND_SOC_DAPM_PGA("IF DACL2", SND_SOC_NOPM, 0, 0, NULL, 0),
++	SND_SOC_DAPM_PGA("IF DACR2", SND_SOC_NOPM, 0, 0, NULL, 0),
++	SND_SOC_DAPM_PGA("IF DACL3", SND_SOC_NOPM, 0, 0, NULL, 0),
++	SND_SOC_DAPM_PGA("IF DACR3", SND_SOC_NOPM, 0, 0, NULL, 0),
++
++	/* Digital Interface Select */
++	SND_SOC_DAPM_MIXER("IF DACL Mixer", SND_SOC_NOPM, 0, 0,
++			   &es8389_left_mixer_controls[0],
++			   ARRAY_SIZE(es8389_left_mixer_controls)),
++	SND_SOC_DAPM_MIXER("IF DACR Mixer", SND_SOC_NOPM, 0, 0,
++			   &es8389_right_mixer_controls[0],
++			   ARRAY_SIZE(es8389_right_mixer_controls)),
++
++	SND_SOC_DAPM_MIXER("ADC Mixer", SND_SOC_NOPM, 0, 0,
++			   &es8389_adc_mixer_controls[0],
++			   ARRAY_SIZE(es8389_adc_mixer_controls)),
++	SND_SOC_DAPM_MUX("ADC MUX", SND_SOC_NOPM, 0, 0, &es8389_dmic_mux_controls),
++	
++	SND_SOC_DAPM_MUX("OUTL MUX", SND_SOC_NOPM, 0, 0, &es8389_outl_mux_controls),
++	SND_SOC_DAPM_MUX("OUTR MUX", SND_SOC_NOPM, 0, 0, &es8389_outr_mux_controls),
++};
++
++
++static const struct snd_soc_dapm_route es8389_dapm_routes[] = {
++	{"PGAL", NULL, "INPUT1"},
++	{"PGAR", NULL, "INPUT2"},
++
++	{"ADCL", NULL, "PGAL"},
++	{"ADCR", NULL, "PGAR"},
++	
++	{"ADC Mixer", "DACL ADCL Mixer", "DACL"},
++	{"ADC Mixer", "DACR ADCR Mixer", "DACR"},
++	{"ADC Mixer", NULL, "ADCL"},
++	{"ADC Mixer", NULL, "ADCR"},
++
++	{"ADC MUX", "AMIC", "ADC Mixer"},
++	{"ADC MUX", "DMIC", "DMIC"},
++
++	{"I2S OUT", NULL, "ADC MUX"},
++
++	{"DACL", NULL, "I2S IN"},
++	{"DACR", NULL, "I2S IN"},
++
++	{"IF DACL1", NULL, "DACL"},
++	{"IF DACR1", NULL, "DACR"},
++	{"IF DACL2", NULL, "DACL"},
++	{"IF DACR2", NULL, "DACR"},
++	{"IF DACL3", NULL, "DACL"},
++	{"IF DACR3", NULL, "DACR"},
++
++
++	{"IF DACL Mixer", NULL, "IF DACL2"},	
++	{"IF DACL Mixer", "DACR DACL Mixer", "IF DACR1"},
++	{"IF DACR Mixer", NULL, "IF DACR2"},	
++	{"IF DACR Mixer", "DACL DACR Mixer", "IF DACL1"},
++
++	{"OUTL MUX", "normal", "IF DACL Mixer"},
++	{"OUTL MUX", "DAC2 channel to DAC1 channel", "IF DACR Mixer"},
++	{"OUTR MUX", "normal", "IF DACR Mixer"},
++	{"OUTR MUX", "DAC1 channel to DAC2 channel", "IF DACL Mixer"},
++
++	{"HPOL", NULL, "OUTL MUX"},
++	{"HPOR", NULL, "OUTR MUX"},
++
++};
++
++struct _coeff_div {
++	u16 fs;
++	u32 mclk;
++	u32 rate;
++	u8 Reg0x04;
++	u8 Reg0x05;
++	u8 Reg0x06;
++	u8 Reg0x07;
++	u8 Reg0x08;
++	u8 Reg0x09;
++	u8 Reg0x0A;
++	u8 Reg0x0F;
++	u8 Reg0x11;
++	u8 Reg0x21;
++	u8 Reg0x22;
++	u8 Reg0x26;
++	u8 Reg0x30;
++	u8 Reg0x41;
++	u8 Reg0x42;
++	u8 Reg0x43;
++	u8 Reg0xF0;
++	u8 Reg0xF1;
++	u8 Reg0x16;
++	u8 Reg0x18;
++	u8 Reg0x19;
++};
++
++
++/* codec hifi mclk clock divider coefficients */
++static const struct _coeff_div  coeff_div[] = {
++	{32 ,256000 ,8000 ,0x00 ,0x57 ,0x84 ,0xD0 ,0x03 ,0xC1 ,0xB0 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{36 ,288000 ,8000 ,0x00 ,0x55 ,0x84 ,0xD0 ,0x01 ,0xC1 ,0x90 ,0x00 ,0x00 ,0x23 ,0x8F ,0xB7 ,0xC0 ,0x1F ,0x8F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{48 ,384000 ,8000 ,0x02 ,0x5F ,0x04 ,0xC0 ,0x03 ,0xC1 ,0xB0 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{64 ,512000 ,8000 ,0x00 ,0x4D ,0x24 ,0xC0 ,0x03 ,0xD1 ,0xB0 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{72 ,576000 ,8000 ,0x00 ,0x45 ,0x24 ,0xC0 ,0x01 ,0xD1 ,0x90 ,0x00 ,0x00 ,0x23 ,0x8F ,0xB7 ,0xC0 ,0x1F ,0x8F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{96 ,768000 ,8000 ,0x02 ,0x57 ,0x84 ,0xD0 ,0x03 ,0xC1 ,0xB0 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{128 ,1024000 ,8000 ,0x00 ,0x45 ,0x04 ,0xD0 ,0x03 ,0xC1 ,0xB0 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{192 ,1536000 ,8000 ,0x02 ,0x4D ,0x24 ,0xC0 ,0x03 ,0xD1 ,0xB0 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{256 ,2048000 ,8000 ,0x01 ,0x45 ,0x04 ,0xD0 ,0x03 ,0xC1 ,0xB0 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{288 ,2304000 ,8000 ,0x01 ,0x51 ,0x00 ,0xC0 ,0x01 ,0xC1 ,0x90 ,0x00 ,0x00 ,0x23 ,0x8F ,0xB7 ,0xC0 ,0x1F ,0x8F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{384 ,3072000 ,8000 ,0x02 ,0x45 ,0x04 ,0xD0 ,0x03 ,0xC1 ,0xB0 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{512 ,4096000 ,8000 ,0x00 ,0x41 ,0x04 ,0xE0 ,0x00 ,0xD1 ,0xB0 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{768 ,6144000 ,8000 ,0x05 ,0x45 ,0x04 ,0xD0 ,0x03 ,0xC1 ,0xB0 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{1024 ,8192000 ,8000 ,0x01 ,0x41 ,0x06 ,0xE0 ,0x00 ,0xD1 ,0xB0 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{1536 ,12288000 ,8000 ,0x02 ,0x41 ,0x04 ,0xE0 ,0x00 ,0xD1 ,0xB0 ,0x40 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{1625 ,13000000 ,8000 ,0x40 ,0x6E ,0x05 ,0xC8 ,0x01 ,0xC2 ,0x90 ,0x40 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0x63 ,0x95 ,0x00 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{2048 ,16384000 ,8000 ,0x03 ,0x44 ,0x01 ,0xC0 ,0x00 ,0xD2 ,0x80 ,0x40 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{2304 ,18432000 ,8000 ,0x11 ,0x45 ,0x25 ,0xF0 ,0x00 ,0xD1 ,0xB0 ,0x40 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{3072 ,24576000 ,8000 ,0x05 ,0x44 ,0x01 ,0xC0 ,0x00 ,0xD2 ,0x80 ,0x40 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{32 ,512000 ,16000 ,0x00 ,0x55 ,0x84 ,0xD0 ,0x01 ,0xC1 ,0x90 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{36 ,576000 ,16000 ,0x00 ,0x55 ,0x84 ,0xD0 ,0x01 ,0xC1 ,0x90 ,0x00 ,0x00 ,0x23 ,0x8F ,0xB7 ,0xC0 ,0x1F ,0x8F ,0x01 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{48 ,768000 ,16000 ,0x02 ,0x57 ,0x04 ,0xC0 ,0x01 ,0xC1 ,0x90 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{50 ,800000 ,16000 ,0x00 ,0x7E ,0x01 ,0xD9 ,0x00 ,0xC2 ,0x80 ,0x00 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0xC7 ,0x95 ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{64 ,1024000 ,16000 ,0x00 ,0x45 ,0x24 ,0xC0 ,0x01 ,0xD1 ,0x90 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{72 ,1152000 ,16000 ,0x00 ,0x45 ,0x24 ,0xC0 ,0x01 ,0xD1 ,0x90 ,0x00 ,0x00 ,0x23 ,0x8F ,0xB7 ,0xC0 ,0x1F ,0x8F ,0x01 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{96 ,1536000 ,16000 ,0x02 ,0x55 ,0x84 ,0xD0 ,0x01 ,0xC1 ,0x90 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{128 ,2048000 ,16000 ,0x00 ,0x51 ,0x04 ,0xD0 ,0x01 ,0xC1 ,0x90 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{144 ,2304000 ,16000 ,0x00 ,0x51 ,0x00 ,0xC0 ,0x01 ,0xC1 ,0x90 ,0x00 ,0x00 ,0x23 ,0x8F ,0xB7 ,0xC0 ,0x1F ,0x8F ,0x01 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{192 ,3072000 ,16000 ,0x02 ,0x65 ,0x25 ,0xE0 ,0x00 ,0xE1 ,0x90 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{256 ,4096000 ,16000 ,0x00 ,0x41 ,0x04 ,0xC0 ,0x01 ,0xD1 ,0x90 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{300 ,4800000 ,16000 ,0x02 ,0x66 ,0x01 ,0xD9 ,0x00 ,0xC2 ,0x80 ,0x00 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0xC7 ,0x95 ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{384 ,6144000 ,16000 ,0x02 ,0x51 ,0x04 ,0xD0 ,0x01 ,0xC1 ,0x90 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{512 ,8192000 ,16000 ,0x01 ,0x41 ,0x04 ,0xC0 ,0x01 ,0xD1 ,0x90 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{750 ,12000000 ,16000 ,0x0E ,0x7E ,0x01 ,0xC9 ,0x00 ,0xC2 ,0x80 ,0x40 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0xC7 ,0x95 ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{768 ,12288000 ,16000 ,0x02 ,0x41 ,0x04 ,0xC0 ,0x01 ,0xD1 ,0x90 ,0x40 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{1024 ,16384000 ,16000 ,0x03 ,0x41 ,0x04 ,0xC0 ,0x01 ,0xD1 ,0x90 ,0x40 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{1152 ,18432000 ,16000 ,0x08 ,0x51 ,0x04 ,0xD0 ,0x01 ,0xC1 ,0x90 ,0x40 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{1200 ,19200000 ,16000 ,0x0B ,0x66 ,0x01 ,0xD9 ,0x00 ,0xC2 ,0x80 ,0x40 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0xC7 ,0x95 ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{1500 ,24000000 ,16000 ,0x0E ,0x26 ,0x01 ,0xD9 ,0x00 ,0xC2 ,0x80 ,0xC0 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0xC7 ,0x95 ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{1536 ,24576000 ,16000 ,0x05 ,0x41 ,0x04 ,0xC0 ,0x01 ,0xD1 ,0x90 ,0xC0 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0xFF ,0x7F ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{1625 ,26000000 ,16000 ,0x40 ,0x6E ,0x05 ,0xC8 ,0x01 ,0xC2 ,0x90 ,0xC0 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0x63 ,0x95 ,0x00 ,0x12 ,0x00 ,0x12 ,0x31 ,0x0E},
++	{800 ,19200000 ,24000 ,0x07 ,0x66 ,0x01 ,0xD9 ,0x00 ,0xC2 ,0x80 ,0x40 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0xC7 ,0x95 ,0x00 ,0x12 ,0x00 ,0x1A ,0x49 ,0x14},
++	{600 ,19200000 ,32000 ,0x05 ,0x46 ,0x01 ,0xD8 ,0x10 ,0xD2 ,0x80 ,0x40 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0x63 ,0x95 ,0x00 ,0x12 ,0x00 ,0x23 ,0x61 ,0x1B},
++	{32 ,1411200 ,44100 ,0x00 ,0x45 ,0xA4 ,0xD0 ,0x10 ,0xD1 ,0x80 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{64 ,2822400 ,44100 ,0x00 ,0x51 ,0x00 ,0xC0 ,0x10 ,0xC1 ,0x80 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{128 ,5644800 ,44100 ,0x00 ,0x41 ,0x04 ,0xD0 ,0x10 ,0xD1 ,0x80 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{256 ,11289600 ,44100 ,0x01 ,0x41 ,0x04 ,0xD0 ,0x10 ,0xD1 ,0x80 ,0x40 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{512 ,22579200 ,44100 ,0x03 ,0x41 ,0x04 ,0xD0 ,0x10 ,0xD1 ,0x80 ,0xC0 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{32 ,1536000 ,48000 ,0x00 ,0x45 ,0xA4 ,0xD0 ,0x10 ,0xD1 ,0x80 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{48 ,2304000 ,48000 ,0x02 ,0x55 ,0x04 ,0xC0 ,0x10 ,0xC1 ,0x80 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{50 ,2400000 ,48000 ,0x00 ,0x76 ,0x01 ,0xC8 ,0x10 ,0xC2 ,0x80 ,0x00 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0x63 ,0x95 ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{64 ,3072000 ,48000 ,0x00 ,0x51 ,0x04 ,0xC0 ,0x10 ,0xC1 ,0x80 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{100 ,4800000 ,48000 ,0x00 ,0x46 ,0x01 ,0xD8 ,0x10 ,0xD2 ,0x80 ,0x00 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0x63 ,0x95 ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{125 ,6000000 ,48000 ,0x04 ,0x6E ,0x05 ,0xC8 ,0x10 ,0xC2 ,0x80 ,0x00 ,0x01 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0x63 ,0x95 ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{128 ,6144000 ,48000 ,0x00 ,0x41 ,0x04 ,0xD0 ,0x10 ,0xD1 ,0x80 ,0x00 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{200 ,9600000 ,48000 ,0x01 ,0x46 ,0x01 ,0xD8 ,0x10 ,0xD2 ,0x80 ,0x00 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0x63 ,0x95 ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{250 ,12000000 ,48000 ,0x04 ,0x76 ,0x01 ,0xC8 ,0x10 ,0xC2 ,0x80 ,0x40 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0x63 ,0x95 ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{256 ,12288000 ,48000 ,0x01 ,0x41 ,0x04 ,0xD0 ,0x10 ,0xD1 ,0x80 ,0x40 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{384 ,18432000 ,48000 ,0x02 ,0x41 ,0x04 ,0xD0 ,0x10 ,0xD1 ,0x80 ,0x40 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{400 ,19200000 ,48000 ,0x03 ,0x46 ,0x01 ,0xD8 ,0x10 ,0xD2 ,0x80 ,0x40 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0x63 ,0x95 ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{500 ,24000000 ,48000 ,0x04 ,0x46 ,0x01 ,0xD8 ,0x10 ,0xD2 ,0x80 ,0xC0 ,0x00 ,0x18 ,0x95 ,0xD0 ,0xC0 ,0x63 ,0x95 ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{512 ,24576000 ,48000 ,0x03 ,0x41 ,0x04 ,0xD0 ,0x10 ,0xD1 ,0x80 ,0xC0 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{800 ,38400000 ,48000 ,0x18 ,0x45 ,0x04 ,0xC0 ,0x10 ,0xC1 ,0x80 ,0xC0 ,0x00 ,0x1F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x00 ,0x12 ,0x00 ,0x35 ,0x91 ,0x28},
++	{128 ,11289600 ,88200 ,0x00 ,0x50 ,0x00 ,0xC0 ,0x10 ,0xC1 ,0x80 ,0x40 ,0x00 ,0x9F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x80 ,0x12 ,0xC0 ,0x32 ,0x89 ,0x25},
++	{64 ,6144000 ,96000 ,0x00 ,0x41 ,0x00 ,0xD0 ,0x10 ,0xD1 ,0x80 ,0x00 ,0x00 ,0x9F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x80 ,0x12 ,0xC0 ,0x35 ,0x91 ,0x28},
++	{128 ,12288000 ,96000 ,0x00 ,0x50 ,0x00 ,0xC0 ,0x10 ,0xC1 ,0x80 ,0xC0 ,0x00 ,0x9F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x80 ,0x12 ,0xC0 ,0x35 ,0x91 ,0x28},
++	{256 ,24576000 ,96000 ,0x00 ,0x40 ,0x00 ,0xC0 ,0x10 ,0xC1 ,0x80 ,0xC0 ,0x00 ,0x9F ,0x7F ,0xBF ,0xC0 ,0x7F ,0x7F ,0x80 ,0x12 ,0xC0 ,0x35 ,0x91 ,0x28},
++	{128 ,24576000 ,192000 ,0x00 ,0x50 ,0x00 ,0xC0 ,0x18 ,0xC1 ,0x81 ,0xC0 ,0x00 ,0x8F ,0x7F ,0xEF ,0xC0 ,0x3F ,0x7F ,0x80 ,0x12 ,0xC0 ,0x3F ,0xF9 ,0x3F},
++
++	{50 ,400000 ,8000 ,0x00 ,0x75 ,0x05 ,0xC8 ,0x01 ,0xC1 ,0x90 ,0x10 ,0x00 ,0x18 ,0xC7 ,0xD0 ,0xC0 ,0x8F ,0xC7 ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{600 ,4800000 ,8000 ,0x05 ,0x65 ,0x25 ,0xF9 ,0x00 ,0xD1 ,0x90 ,0x10 ,0x00 ,0x18 ,0xC7 ,0xD0 ,0xC0 ,0x8F ,0xC7 ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{1500 ,12000000 ,8000 ,0x0E ,0x25 ,0x25 ,0xE8 ,0x00 ,0xD1 ,0x90 ,0x40 ,0x00 ,0x31 ,0xC7 ,0xC5 ,0x00 ,0x8F ,0xC7 ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{2400 ,19200000 ,8000 ,0x0B ,0x01 ,0x00 ,0xD0 ,0x00 ,0xD1 ,0x80 ,0x90 ,0x00 ,0x31 ,0xC7 ,0xC5 ,0x00 ,0xC7 ,0xC7 ,0x00 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{3000 ,24000000 ,8000 ,0x0E ,0x24 ,0x05 ,0xD0 ,0x00 ,0xC2 ,0x80 ,0xC0 ,0x00 ,0x31 ,0xC7 ,0xC5 ,0x00 ,0x8F ,0xC7 ,0x01 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++	{3250 ,26000000 ,8000 ,0x40 ,0x05 ,0xA4 ,0xC0 ,0x00 ,0xD1 ,0x80 ,0xD0 ,0x00 ,0x31 ,0xC7 ,0xC5 ,0x00 ,0xC7 ,0xC7 ,0x00 ,0x12 ,0x00 ,0x09 ,0x19 ,0x07},
++
++};
++static inline int get_coeff(int mclk, int rate)
++{
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(coeff_div); i++) {
++		if ( coeff_div[i].rate == rate &&  coeff_div[i].mclk == mclk)
++			return i;
++	}
++	return -EINVAL;
++}
++
++/*
++ * if PLL not be used, use internal clk1 for mclk,otherwise, use internal clk2 for PLL source.
++ */
++static int es8389_set_dai_sysclk(struct snd_soc_dai *dai,
++			int clk_id, unsigned int freq, int dir)
++{
++	struct snd_soc_component *codec = dai->component;
++	struct es8389_private *es8389 = snd_soc_component_get_drvdata(codec);
++
++	printk("Enter into %s()\n", __func__);
++
++	es8389->sysclk = freq;
++
++	return 0;
++}
++
++static int es8389_set_dai_fmt(struct snd_soc_dai *codec_dai, unsigned int fmt)
++{
++	struct snd_soc_component *codec = codec_dai->component;
++	struct es8389_private *es8389 = snd_soc_component_get_drvdata(codec);
++	u8 state = 0;
++
++	dev_dbg(codec->dev, "Enter into %s()\n", __func__);
++
++	switch(fmt & SND_SOC_DAIFMT_MASTER_MASK)
++	{
++		case SND_SOC_DAIFMT_CBM_CFM:
++			regmap_update_bits(es8389->regmap, ES8389_MASTER_MODE_REG01,
++					ES8389_MASTER_MODE_EN, ES8389_MASTER_MODE_EN);
++			es8389->mastermode = 1;
++			break;
++		case SND_SOC_DAIFMT_CBS_CFS:
++			es8389->mastermode = 0;
++			break;
++		default:
++			return -EINVAL;
++	}
++	
++	switch(fmt & SND_SOC_DAIFMT_FORMAT_MASK)
++	{
++		case SND_SOC_DAIFMT_I2S:
++			state |= ES8389_DAIFMT_I2S;
++			break;				
++		case SND_SOC_DAIFMT_RIGHT_J:
++			dev_err(codec->dev, "Codec driver does not support right justified\n");
++			return -EINVAL;
++		case SND_SOC_DAIFMT_LEFT_J:
++			state |= ES8389_DAIFMT_LEFT_J;
++			break;
++		case SND_SOC_DAIFMT_DSP_A:
++			state |= ES8389_DAIFMT_DSP_A;
++			break;
++		case SND_SOC_DAIFMT_DSP_B:
++			state |= ES8389_DAIFMT_DSP_B;
++			break;
++		default:
++			break;
++	}
++		regmap_update_bits(es8389->regmap, ES8389_ADC_REG20, ES8389_DAIFMT_MASK, state);
++		regmap_update_bits(es8389->regmap, ES8389_DAC_REG40, ES8389_DAIFMT_MASK, state);
++
++		/* clock inversion */
++	switch (fmt & SND_SOC_DAIFMT_INV_MASK) {
++		case SND_SOC_DAIFMT_NB_NF:
++			break;
++		case SND_SOC_DAIFMT_IB_IF:
++			break;
++		case SND_SOC_DAIFMT_IB_NF:
++			break;
++		case SND_SOC_DAIFMT_NB_IF:
++			break;
++		default:
++			break;
++		}	
++
++	return 0;
++}
++
++static int es8389_pcm_hw_params(struct snd_pcm_substream *substream,
++			struct snd_pcm_hw_params *params,
++			struct snd_soc_dai *dai)
++{
++	struct snd_soc_component *codec = dai->component;
++	struct es8389_private *es8389 = snd_soc_component_get_drvdata(codec);
++	int coeff;
++	u8 state = 0;
++
++	printk("Enter into %s()\n", __func__);
++
++	switch (params_format(params)){
++		case SNDRV_PCM_FORMAT_S16_LE:
++			state |= ES8389_S16_LE;
++			break;
++		case SNDRV_PCM_FORMAT_S20_3LE:
++			state |= ES8389_S20_3_LE;
++			break;
++		case SNDRV_PCM_FORMAT_S18_3LE:
++			state |= ES8389_S18_LE;
++			break;
++		case SNDRV_PCM_FORMAT_S24_LE:
++			state |= ES8389_S24_LE;
++			break;
++		case SNDRV_PCM_FORMAT_S32_LE:
++			state |= ES8389_S32_LE;
++			break;
++		default:
++			return -EINVAL;
++	}
++
++	regmap_update_bits(es8389->regmap, ES8389_ADC_REG20, ES8389_DATA_LEN_MASK, state);
++	regmap_update_bits(es8389->regmap, ES8389_DAC_REG40, ES8389_DATA_LEN_MASK, state);
++
++	if(es8389->mclk_src == ES8389_SCLK_PIN)
++	{
++		regmap_update_bits(es8389->regmap, ES8389_MASTER_CLK_REG02, 
++					ES8389_MCLK_SOURCE, es8389->mclk_src);
++		es8389->sysclk = params_channels(params) * params_width(params) * params_rate(params);
++	}
++	
++	coeff = get_coeff(es8389->sysclk, params_rate(params));
++	if(coeff >= 0)
++	{
++		regmap_write(es8389->regmap, ES8389_CLK_DIV1_REG04, coeff_div[coeff].Reg0x04);
++		regmap_write(es8389->regmap, ES8389_CLK_MUL_REG05, coeff_div[coeff].Reg0x05);
++		regmap_write(es8389->regmap, ES8389_CLK_MUX1_REG06, coeff_div[coeff].Reg0x06);
++		regmap_write(es8389->regmap, ES8389_CLK_MUX2_REG07, coeff_div[coeff].Reg0x07);
++		regmap_write(es8389->regmap, ES8389_CLK_CTL1_REG08, coeff_div[coeff].Reg0x08);
++		regmap_write(es8389->regmap, ES8389_CLK_CTL2_REG09, coeff_div[coeff].Reg0x09);
++		regmap_write(es8389->regmap, ES8389_CLK_CTL3_REG0A, coeff_div[coeff].Reg0x0A);
++		regmap_update_bits(es8389->regmap, ES8389_OSC_CLK_REG0F, 
++						0xC0, coeff_div[coeff].Reg0x0F);
++		regmap_write(es8389->regmap, ES8389_CLK_DIV2_REG11, coeff_div[coeff].Reg0x11);
++		regmap_write(es8389->regmap, ES8389_ADC_REG21, coeff_div[coeff].Reg0x21);
++		regmap_write(es8389->regmap, ES8389_ADC_REG22, coeff_div[coeff].Reg0x22);
++		regmap_write(es8389->regmap, ES8389_OSR_VOL_REG26, coeff_div[coeff].Reg0x26);
++		regmap_update_bits(es8389->regmap, ES8389_SYSTEM_REG30, 
++						0xC0, coeff_div[coeff].Reg0x30);
++		regmap_write(es8389->regmap, ES8389_DAC_REG41, coeff_div[coeff].Reg0x41);
++		regmap_write(es8389->regmap, ES8389_DAC_REG42, coeff_div[coeff].Reg0x42);
++		regmap_update_bits(es8389->regmap, ES8389_DAC_REG43, 
++						0x81, coeff_div[coeff].Reg0x43);
++		regmap_update_bits(es8389->regmap, ES8389_CHIP_MISC_REGF0, 
++						0x72, coeff_div[coeff].Reg0xF0);
++		regmap_write(es8389->regmap, ES8389_CSM_STATE1_REGF1, coeff_div[coeff].Reg0xF1);
++		regmap_write(es8389->regmap, ES8389_SYSTEM_REG16, coeff_div[coeff].Reg0x16);
++		regmap_write(es8389->regmap, ES8389_SYSTEM_REG18, coeff_div[coeff].Reg0x18);
++		regmap_write(es8389->regmap, ES8389_SYSTEM_REG19, coeff_div[coeff].Reg0x19);
++	} else {
++		dev_warn(codec->dev, "Clock coefficients do not match");
++	}
++
++	return 0;
++}
++
++static int es8389_set_bias_level(struct snd_soc_component *codec,
++			enum snd_soc_bias_level level)
++{
++	int ret;
++	struct es8389_private *es8389 = snd_soc_component_get_drvdata(codec);
++	printk("Enter into %s(), level = %d\n", __func__, level);
++	switch (level) {
++	case SND_SOC_BIAS_ON:
++		printk("%s on\n",__func__);
++		if (!es8389->adc_slot) {
++			ret = clk_prepare_enable(es8389->mclk);
++			if (ret)
++				return ret;
++		}
++		regmap_update_bits(es8389->regmap, ES8389_HPSW_REG69, 0x20, 0x20);
++		regmap_write(es8389->regmap, ES8389_ANA_CTL1_REG61, 0xD9);
++		regmap_write(es8389->regmap, ES8389_ADC_EN_REG64, 0x8F);
++		regmap_write(es8389->regmap, ES8389_CSM_JUMP_REG10, 0xE4);
++		regmap_write(es8389->regmap, ES8389_RESET_REG00, 0x01);
++		regmap_write(es8389->regmap, ES8389_CLK_OFF1_REG03, 0xC3);
++		regmap_update_bits(es8389->regmap, ES8389_ADC_HPF1_REG24, 0x0f, 0x0a);
++		regmap_update_bits(es8389->regmap, ES8389_ADC_HPF2_REG25, 0x0f, 0x0a);
++		usleep_range(70000,72000);
++		regmap_write(es8389->regmap, ES8389_DAC_RESET_REG4D, 0X00);
++		break;
++	case SND_SOC_BIAS_PREPARE:
++		printk("%s prepare\n",__func__);
++		break;
++	case SND_SOC_BIAS_STANDBY:
++		printk("%s standby\n",__func__);
++		regmap_update_bits(es8389->regmap, ES8389_ADC_HPF1_REG24, 0x0f, 0x04);
++		regmap_update_bits(es8389->regmap, ES8389_ADC_HPF2_REG25, 0x0f, 0x04);
++		regmap_write(es8389->regmap, ES8389_CSM_JUMP_REG10, 0xD4);
++		usleep_range(70000,72000); 
++		regmap_write(es8389->regmap, ES8389_ANA_CTL1_REG61, 0x59);
++		regmap_write(es8389->regmap, ES8389_ADC_EN_REG64, 0x00);
++		regmap_write(es8389->regmap, ES8389_CLK_OFF1_REG03, 0x00);
++		regmap_write(es8389->regmap, ES8389_RESET_REG00, 0x7E);
++		regmap_update_bits(es8389->regmap, ES8389_DAC_INV_REG45, 0x80, 0x80);
++		usleep_range(8000,8500);
++		regmap_update_bits(es8389->regmap, ES8389_DAC_INV_REG45, 0x80, 0x00);
++		if (!es8389->adc_slot)
++			clk_disable_unprepare(es8389->mclk);
++		break;
++	case SND_SOC_BIAS_OFF:
++		printk("%s off\n",__func__);
++		break;
++	}
++	return 0;
++}
++
++
++
++static int es8389_mute(struct snd_soc_dai *dai, int mute, int direction)
++{
++	struct snd_soc_component *codec = dai->component;
++	struct es8389_private *es8389 = snd_soc_component_get_drvdata(codec);
++	printk("Enter into %s(), mute = %d\n", __func__, mute);
++
++	if(mute) {
++		if (direction == SNDRV_PCM_STREAM_PLAYBACK) {
++			regmap_update_bits(es8389->regmap, ES8389_DAC_REG40,
++						0x03, 0x03);
++		} else {
++			regmap_update_bits(es8389->regmap, ES8389_ADC_REG20,
++						0x03, 0x03);
++		}
++	} else {
++		if (direction == SNDRV_PCM_STREAM_PLAYBACK) {
++			regmap_update_bits(es8389->regmap, ES8389_DAC_REG40, 
++						0x03, 0x00);
++			
++		} else {
++			regmap_update_bits(es8389->regmap, ES8389_ADC_REG20,
++						0x03, 0x00);
++		}
++	}
++
++	return 0;
++}
++
++#define es8389_RATES SNDRV_PCM_RATE_8000_96000
++
++#define es8389_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE |\
++		SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S24_3LE | SNDRV_PCM_FMTBIT_S32_LE)
++
++static const struct snd_soc_dai_ops es8389_ops = {
++	.hw_params = es8389_pcm_hw_params,
++	.set_fmt = es8389_set_dai_fmt,
++	.set_sysclk = es8389_set_dai_sysclk,
++	.mute_stream = es8389_mute,
++};
++
++static struct snd_soc_dai_driver es8389_dai = {
++	.name = "ES8389 HiFi",
++	.playback = {
++		.stream_name = "Playback",
++		.channels_min = 1,
++		.channels_max = 2,
++		.rates = es8389_RATES,
++		.formats = es8389_FORMATS,
++	},
++	.capture = {
++		.stream_name = "Capture",
++		.channels_min = 1,
++		.channels_max = 2,
++		.rates = es8389_RATES,
++		.formats = es8389_FORMATS,
++	},
++	.ops = &es8389_ops,
++	.symmetric_rates = 1,
++};
++
++static void es8389_init(struct snd_soc_component *codec)
++{
++	struct es8389_private *es8389 = snd_soc_component_get_drvdata(codec);
++
++	regmap_write(es8389->regmap, ES8389_ISO_CTL_REGF3, 0x00);
++	regmap_write(es8389->regmap, ES8389_RESET_REG00, 0x7E);
++	regmap_write(es8389->regmap, ES8389_ISO_CTL_REGF3, 0x38);
++	regmap_write(es8389->regmap, ES8389_ADC_HPF1_REG24, 0x64);
++	regmap_write(es8389->regmap, ES8389_ADC_HPF2_REG25, 0x04);
++	regmap_write(es8389->regmap, ES8389_DAC_INV_REG45, 0x03);
++
++	regmap_write(es8389->regmap, ES8389_VMID_REG60, 0x2A);
++	regmap_write(es8389->regmap, ES8389_ANA_CTL1_REG61, 0xC9);
++	regmap_write(es8389->regmap, ES8389_ANA_VSEL_REG62, 0x4F);
++	regmap_write(es8389->regmap, ES8389_ANA_CTL2_REG63, 0x06);
++	regmap_write(es8389->regmap, ES8389_LOW_POWER1_REG6B, 0x00);
++	regmap_write(es8389->regmap, ES8389_DMIC_EN_REG6D, 0x16);
++
++	regmap_write(es8389->regmap, ES8389_PGA_SW_REG6E, 0xAA);
++	regmap_write(es8389->regmap, ES8389_MOD_SW1_REG6F, 0x66);
++	regmap_write(es8389->regmap, ES8389_MOD_SW2_REG70, 0x99);
++	regmap_write(es8389->regmap, ES8389_ADC_MODE_REG23, (0x00 | ES8389_TDM_MODE)); 
++	
++	if(es8389->dmic == true) {
++		regmap_update_bits(es8389->regmap, ES8389_DMIC_EN_REG6D, 0xC0, 0xC0);
++		regmap_update_bits(es8389->regmap, ES8389_ADC_MODE_REG23, 0x03, 0x03);
++	} else {
++		regmap_update_bits(es8389->regmap, ES8389_DMIC_EN_REG6D, 0xC0, 0x00);
++		regmap_update_bits(es8389->regmap, ES8389_ADC_MODE_REG23, 0x03, 0x00);
++	}
++
++	regmap_write(es8389->regmap, ES8389_MIC1_GAIN_REG72, 0x10);     
++	regmap_write(es8389->regmap, ES8389_MIC2_GAIN_REG73, 0x10);        
++	regmap_write(es8389->regmap, ES8389_CSM_JUMP_REG10, 0xC4);
++	regmap_write(es8389->regmap, ES8389_MASTER_MODE_REG01, 0x08);
++	regmap_write(es8389->regmap, ES8389_CSM_STATE1_REGF1, 0x00);
++	regmap_write(es8389->regmap, ES8389_SYSTEM_REG12, 0x01);
++	regmap_write(es8389->regmap, ES8389_SYSTEM_REG13, 0x01);
++	regmap_write(es8389->regmap, ES8389_SYSTEM_REG14, 0x01);
++	regmap_write(es8389->regmap, ES8389_SYSTEM_REG15, 0x01);
++	regmap_write(es8389->regmap, ES8389_SYSTEM_REG16, 0x35);
++	regmap_write(es8389->regmap, ES8389_SYSTEM_REG17, 0x09);
++	regmap_write(es8389->regmap, ES8389_SYSTEM_REG18, 0x91);
++	regmap_write(es8389->regmap, ES8389_SYSTEM_REG19, 0x28);
++	regmap_write(es8389->regmap, ES8389_SYSTEM_REG1A, 0x01);
++	regmap_write(es8389->regmap, ES8389_SYSTEM_REG1B, 0x01);
++	regmap_write(es8389->regmap, ES8389_SYSTEM_REG1C, 0x11);
++	
++	regmap_write(es8389->regmap, ES8389_CHIP_MISC_REGF0, 0x13);
++	regmap_write(es8389->regmap, ES8389_MASTER_CLK_REG02, 0x00);
++	regmap_write(es8389->regmap, ES8389_CLK_DIV1_REG04, 0x00);
++	regmap_write(es8389->regmap, ES8389_CLK_MUL_REG05, 0x10);
++	regmap_write(es8389->regmap, ES8389_CLK_MUX1_REG06, 0x00);
++	regmap_write(es8389->regmap, ES8389_CLK_MUX2_REG07, 0xC0);
++	regmap_write(es8389->regmap, ES8389_CLK_CTL1_REG08, 0x00);
++	regmap_write(es8389->regmap, ES8389_CLK_CTL2_REG09, 0xC0);
++	regmap_write(es8389->regmap, ES8389_CLK_CTL3_REG0A, 0x80);
++	regmap_write(es8389->regmap, ES8389_SCLK_DIV_REG0B, 0x04);
++	regmap_write(es8389->regmap, ES8389_LRCK_DIV1_REG0C, 0x01);
++	regmap_write(es8389->regmap, ES8389_LRCK_DIV2_REG0D, 0x00);
++	regmap_write(es8389->regmap, ES8389_OSC_CLK_REG0F, 0x00);
++	regmap_write(es8389->regmap, ES8389_ADC_REG21, 0x1F);
++	regmap_write(es8389->regmap, ES8389_ADC_REG22, 0x7F);
++	regmap_write(es8389->regmap, ES8389_ADC_MUTE_REG2F, 0xC0);
++	regmap_write(es8389->regmap, ES8389_SYSTEM_REG30, 0xF4);
++	regmap_write(es8389->regmap, ES8389_DAC_REG41, 0x7F);
++	regmap_write(es8389->regmap, ES8389_DAC_REG42, 0x7F);
++	regmap_write(es8389->regmap, ES8389_DAC_REG43, 0x10);
++	regmap_write(es8389->regmap, ES8389_DAC_RAMP_REG49, 0x0F);
++	regmap_write(es8389->regmap, ES8389_SYSTEM_REG4C, 0xC0);
++	regmap_write(es8389->regmap, ES8389_RESET_REG00, 0x00);
++	regmap_write(es8389->regmap, ES8389_CLK_OFF1_REG03, 0xC1);
++	regmap_write(es8389->regmap, ES8389_RESET_REG00, 0x01);
++	regmap_write(es8389->regmap, ES8389_DAC_RESET_REG4D, 0x02);
++
++	regmap_update_bits(es8389->regmap, ES8389_PTDM_SLOT_REG2A, 
++					ES8389_TDM_SLOT, (es8389->adc_slot << 4));
++	regmap_update_bits(es8389->regmap, ES8389_DAC_RAMP_REG49, 
++					ES8389_TDM_SLOT, (es8389->dac_slot << 4));
++	
++	regmap_update_bits(es8389->regmap, ES8389_ADC_REG20, 0x03, 0x03);
++	regmap_update_bits(es8389->regmap, ES8389_DAC_REG40, 0x03, 0x03);
++
++	//es8389_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
++}
++
++static int es8389_suspend(struct snd_soc_component *codec)
++{
++	struct es8389_private *es8389 = snd_soc_component_get_drvdata(codec);
++	printk("Enter into %s()\n", __func__);
++	
++	es8389_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
++	regcache_cache_only(es8389->regmap, true);
++	regcache_mark_dirty(es8389->regmap);
++
++	return 0;
++}
++
++static int es8389_resume(struct snd_soc_component *codec)
++{
++	struct es8389_private *es8389 = snd_soc_component_get_drvdata(codec);
++	unsigned int regv;
++	printk("Enter into %s()\n", __func__);
++	
++	regcache_cache_only(es8389->regmap, false);
++	regcache_cache_bypass(es8389->regmap, true);
++	regmap_read(es8389->regmap, ES8389_RESET_REG00, &regv);
++	regcache_cache_bypass(es8389->regmap, false);
++
++	if(regv == 0xff)
++		es8389_init(codec);
++	else
++		es8389_set_bias_level(codec, SND_SOC_BIAS_ON);
++	
++	regcache_sync(es8389->regmap);
++
++	return 0;
++}
++
++static int es8389_probe(struct snd_soc_component *codec)
++{
++	int ret = 0;
++	struct es8389_private *es8389 = snd_soc_component_get_drvdata(codec);
++	printk("Enter into %s()\n", __func__);
++
++	ret = device_property_read_u8(codec->dev, "everest,mclk-src", &es8389->mclk_src);
++	if (ret != 0) {
++		dev_dbg(codec->dev, "mclk-src return %d", ret);
++		es8389->mclk_src = ES8389_MCLK_SOURCE;
++	}
++
++	ret = device_property_read_u8(codec->dev, "everest,adc-slot", &es8389->adc_slot);
++	if (ret != 0) {
++		dev_dbg(codec->dev, "adc-slot return %d", ret);
++		es8389->adc_slot = 0x00;
++	}
++
++	ret = device_property_read_u8(codec->dev, "everest,dac-slot", &es8389->dac_slot);
++	if (ret != 0) {
++		dev_dbg(codec->dev, "dac-slot return %d", ret);
++		es8389->dac_slot = 0x00;
++	}
++
++	es8389->dmic = device_property_read_bool(codec->dev,
++			"everest,dmic-enabled");
++	dev_dbg(codec->dev, "dmic-enabled %x", es8389->dmic);
++
++	if (!es8389->adc_slot) {
++		es8389->mclk = devm_clk_get(codec->dev, "mclk");
++		if (IS_ERR(es8389->mclk)) {
++			dev_err(codec->dev, "%s,unable to get mclk\n", __func__);
++			return PTR_ERR(es8389->mclk);
++		}
++		if (!es8389->mclk)
++			dev_err(codec->dev, "%s, assuming static mclk\n", __func__);
++
++		ret = clk_prepare_enable(es8389->mclk);
++		if (ret) {
++			dev_err(codec->dev, "%s, unable to enable mclk\n", __func__);
++			return ret;
++		}
++	}
++
++	es8389_init(codec);
++
++	return 0;
++}
++
++static void es8389_remove(struct snd_soc_component *codec)
++{
++	struct es8389_private *es8389 = snd_soc_component_get_drvdata(codec);
++
++	printk("Enter into %s()\n", __func__);
++	regmap_write(es8389->regmap, ES8389_MASTER_MODE_REG01, 0x28);
++	regmap_write(es8389->regmap, ES8389_HPSW_REG69, 0x00);
++	regmap_write(es8389->regmap, ES8389_VMID_REG60, 0x00);
++	regmap_write(es8389->regmap, ES8389_RESET_REG00, 0x00);
++	regmap_write(es8389->regmap, ES8389_CSM_JUMP_REG10, 0xCC);
++	usleep_range(500000,550000); //500MS
++	regmap_write(es8389->regmap, ES8389_CSM_JUMP_REG10, 0x00); 
++	regmap_write(es8389->regmap, ES8389_ANA_CTL1_REG61, 0x08); 
++	regmap_write(es8389->regmap, ES8389_ISO_CTL_REGF3, 0xC1); 
++	regmap_write(es8389->regmap, ES8389_PULL_DOWN_REGF2, 0x00); 
++
++}
++
++static struct snd_soc_component_driver soc_codec_dev_es8389 = {
++	.probe = es8389_probe,
++	.remove = es8389_remove,
++	.suspend = es8389_suspend,
++	.resume = es8389_resume,
++	.set_bias_level = es8389_set_bias_level,
++
++	.controls = es8389_snd_controls,
++	.num_controls = ARRAY_SIZE(es8389_snd_controls),
++	.dapm_widgets = es8389_dapm_widgets,
++	.num_dapm_widgets = ARRAY_SIZE(es8389_dapm_widgets),
++	.dapm_routes = es8389_dapm_routes,
++	.num_dapm_routes = ARRAY_SIZE(es8389_dapm_routes),
++	.idle_bias_on = 1,
++	.use_pmdown_time = 1,
++};
++
++static struct regmap_config es8389_regmap = {
++	.reg_bits = 8,
++	.val_bits = 8,
++
++	.max_register = ES8389_MAX_REGISTER,
++
++	.volatile_reg = es8389_volatile_register,
++	.cache_type = REGCACHE_RBTREE,
++};
++
++#ifdef CONFIG_OF
++static struct of_device_id es8389_if_dt_ids[] = {
++	{ .compatible = "everest,es8389", },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, es8389_if_dt_ids);
++#endif
++
++static void es8389_i2c_shutdown(struct i2c_client *i2c)
++{
++	struct snd_soc_component *component;
++	struct es8389_private *es8389;
++
++	es8389 = i2c_get_clientdata(i2c);
++	component = es8389->component;
++	dev_dbg(component->dev, "Enter into %s\n", __func__);
++
++	regmap_write(es8389->regmap, ES8389_MASTER_MODE_REG01, 0x28);
++	regmap_write(es8389->regmap, ES8389_HPSW_REG69, 0x00);
++	regmap_write(es8389->regmap, ES8389_VMID_REG60, 0x00);
++	regmap_write(es8389->regmap, ES8389_RESET_REG00, 0x00);
++	regmap_write(es8389->regmap, ES8389_CSM_JUMP_REG10, 0xCC);
++	usleep_range(500000,550000); //500MS
++	regmap_write(es8389->regmap, ES8389_CSM_JUMP_REG10, 0x00); 
++	regmap_write(es8389->regmap, ES8389_ANA_CTL1_REG61, 0x08); 
++	regmap_write(es8389->regmap, ES8389_ISO_CTL_REGF3, 0xC1); 
++	regmap_write(es8389->regmap, ES8389_PULL_DOWN_REGF2, 0x00); 
++}
++
++static int es8389_i2c_probe(struct i2c_client *i2c_client,
++		const struct i2c_device_id *id)
++{
++	struct es8389_private *es8389;
++	int ret = -1;
++	//unsigned int val;
++
++	printk("Enter into %s\n", __func__);
++	es8389 = devm_kzalloc(&i2c_client->dev,
++			sizeof(*es8389), GFP_KERNEL);
++	if (es8389 == NULL)
++		return -ENOMEM;
++
++	i2c_set_clientdata(i2c_client, es8389);
++	es8389->regmap = devm_regmap_init_i2c(i2c_client, &es8389_regmap);
++	if (IS_ERR(es8389->regmap)) {
++		ret = PTR_ERR(es8389->regmap);
++		dev_err(&i2c_client->dev, "regmap_init() failed: %d\n", ret);
++		return ret;
++	}
++
++	ret =  devm_snd_soc_register_component(&i2c_client->dev,
++			&soc_codec_dev_es8389,
++			&es8389_dai,
++			1);
++	if (ret < 0) {
++		kfree(es8389);
++		return ret;
++	}
++
++	printk("Exit %s\n", __func__);
++	return ret;
++}
++
++static const struct i2c_device_id es8389_i2c_id[] = {
++	{"es8389", 0 },
++	{ }
++};
++MODULE_DEVICE_TABLE(i2c, es8389_i2c_id);
++
++static struct i2c_driver es8389_i2c_driver = {
++	.driver = {
++		.name	= "es8389",
++		.owner	= THIS_MODULE,
++		.of_match_table = of_match_ptr(es8389_if_dt_ids),
++	},
++	.shutdown = es8389_i2c_shutdown,
++	.probe = es8389_i2c_probe,
++	.id_table = es8389_i2c_id,
++};
++module_i2c_driver(es8389_i2c_driver);
++
++MODULE_DESCRIPTION("ASoC es8389 driver");
++MODULE_AUTHOR("Michael Zhang <zhangyi@everest-semi.com>");
++MODULE_LICENSE("GPL");
++
++
+diff --git a/sound/soc/codecs/es8389.h b/sound/soc/codecs/es8389.h
+new file mode 100644
+index 000000000..690aabde3
+--- /dev/null
++++ b/sound/soc/codecs/es8389.h
+@@ -0,0 +1,139 @@
++/*
++* ES8389.h  --  ES8389 ALSA SoC Audio Codec
++*
++* Authors:
++*
++* Based on ES8374.h by David Yang
++*
++* This program is free software; you can redistribute it and/or modify
++* it under the terms of the GNU General Public License version 2 as
++* published by the Free Software Foundation.
++*/
++
++#ifndef _ES8389_H
++#define _ES8389_H
++
++/*
++*	ES8389_REGISTER NAME_REG_REGISTER ADDRESS
++*/
++#define ES8389_RESET_REG00			0x00  /*reset digital,csm,clock manager etc.*/
++
++/*
++* Clock Scheme Register definition
++*/
++#define ES8389_MASTER_MODE_REG01		0x01
++#define ES8389_MASTER_CLK_REG02			0x02
++#define ES8389_CLK_OFF1_REG03			0x03
++#define ES8389_CLK_DIV1_REG04			0x04
++#define ES8389_CLK_MUL_REG05			0x05
++#define ES8389_CLK_MUX1_REG06			0x06
++#define ES8389_CLK_MUX2_REG07			0x07
++#define ES8389_CLK_CTL1_REG08			0x08
++#define ES8389_CLK_CTL2_REG09			0x09
++#define ES8389_CLK_CTL3_REG0A			0x0A
++#define ES8389_SCLK_DIV_REG0B			0x0B
++#define ES8389_LRCK_DIV1_REG0C			0x0C
++#define ES8389_LRCK_DIV2_REG0D			0x0D
++#define ES8389_CLK_OFF2_REG0E			0x0E
++#define ES8389_OSC_CLK_REG0F			0x0F
++#define ES8389_CSM_JUMP_REG10			0x10
++#define ES8389_CLK_DIV2_REG11			0x11
++#define ES8389_SYSTEM_REG12			0x12
++#define ES8389_SYSTEM_REG13			0x13
++#define ES8389_SYSTEM_REG14			0x14
++#define ES8389_SYSTEM_REG15			0x15
++#define ES8389_SYSTEM_REG16			0x16
++#define ES8389_SYSTEM_REG17			0x17
++#define ES8389_SYSTEM_REG18			0x18
++#define ES8389_SYSTEM_REG19			0x19
++#define ES8389_SYSTEM_REG1A			0x1A
++#define ES8389_SYSTEM_REG1B			0x1B
++#define ES8389_SYSTEM_REG1C			0x1C
++#define ES8389_ADC_REG20			0x20
++#define ES8389_ADC_REG21			0x21
++#define ES8389_ADC_REG22			0x22
++#define ES8389_ADC_MODE_REG23			0x23
++#define ES8389_ADC_HPF1_REG24			0x24
++#define ES8389_ADC_HPF2_REG25			0x25
++#define ES8389_OSR_VOL_REG26			0x26
++#define ES8389_ADCL_VOL_REG27			0x27
++#define ES8389_ADCR_VOL_REG28			0x28
++#define ES8389_ALC_CTL_REG29			0x29
++#define ES8389_PTDM_SLOT_REG2A			0x2A
++#define ES8389_ALC_ON_REG2B			0x2B
++#define ES8389_ALC_TARGET_REG2C			0x2C
++#define ES8389_ALC_GAIN_REG2D			0x2D
++#define ES8389_SYSTEM_REG2E			0x2E
++#define ES8389_ADC_MUTE_REG2F			0x2F
++#define ES8389_SYSTEM_REG30			0x30
++#define ES8389_ADC_RESET_REG31			0x31
++#define ES8389_DAC_REG40			0x40
++#define ES8389_DAC_REG41			0x41
++#define ES8389_DAC_REG42			0x42
++#define ES8389_DAC_REG43			0x43
++#define ES8389_DAC_MIX_REG44			0x44
++#define ES8389_DAC_INV_REG45			0x45
++#define ES8389_DACL_VOL_REG46			0x46
++#define ES8389_DACR_VOL_REG47			0x47
++#define ES8389_MIX_VOL_REG48			0x48
++#define ES8389_DAC_RAMP_REG49			0x49
++#define ES8389_SYSTEM_REG4C			0x4C
++#define ES8389_DAC_RESET_REG4D			0x4D
++#define ES8389_VMID_REG60			0x60
++#define ES8389_ANA_CTL1_REG61			0x61
++#define ES8389_ANA_VSEL_REG62			0x62
++#define ES8389_ANA_CTL2_REG63			0x63
++#define ES8389_ADC_EN_REG64			0x64
++#define ES8389_HPSW_REG69			0x69
++#define ES8389_LOW_POWER1_REG6B			0x6B
++#define ES8389_LOW_POWER2_REG6C			0x6C
++#define ES8389_DMIC_EN_REG6D			0x6D
++#define ES8389_PGA_SW_REG6E			0x6E
++#define ES8389_MOD_SW1_REG6F			0x6F
++#define ES8389_MOD_SW2_REG70			0x70
++#define ES8389_MOD_SW3_REG71			0x71
++#define ES8389_MIC1_GAIN_REG72			0x72
++#define ES8389_MIC2_GAIN_REG73			0x73
++
++#define ES8389_CHIP_MISC_REGF0			0xF0
++#define ES8389_CSM_STATE1_REGF1			0xF1
++#define ES8389_PULL_DOWN_REGF2			0xF2
++#define ES8389_ISO_CTL_REGF3			0xF3
++#define ES8389_CSM_STATE2_REGF4			0xF4
++
++#define ES8389_CHIP_ID0_REGFD			0xFD
++#define ES8389_CHIP_ID1_REGFE			0xFE
++
++#define ES8389_MAX_REGISTER			0xFF
++
++#define ES8389_MASTER_MODE_EN	(1 << 0)
++
++#define ES8389_TDM_OFF     (0 << 0)
++#define ES8389_STDM_ON     (1 << 7)
++#define ES8389_PTDM_ON     (1 << 6)
++
++#define ES8389_TDM_MODE     ES8389_TDM_OFF
++#define ES8389_TDM_SLOT     (0x70 << 0)
++
++#define ES8389_MCLK_SOURCE      ES8389_MCLK_PIN
++#define ES8389_MCLK_PIN      (0 << 6)
++#define ES8389_SCLK_PIN      (1 << 6)
++
++/* ES8389_FMT */
++#define ES8389_S24_LE	(0 << 5)
++#define ES8389_S20_3_LE	(1 << 5)
++#define ES8389_S18_LE	(2 << 5)
++#define ES8389_S16_LE	(3 << 5)
++#define ES8389_S32_LE	(4 << 5)
++#define ES8389_DATA_LEN_MASK	(7 << 5)
++
++#define ES8389_DAIFMT_MASK	(7 << 2)
++#define ES8389_DAIFMT_I2S	0
++#define ES8389_DAIFMT_LEFT_J	(1 << 2)
++#define ES8389_DAIFMT_DSP_A	(1 << 3)
++#define ES8389_DAIFMT_DSP_B	(3 << 3)
++
++#define ES8389_STATE_ON         (13 << 0)
++#define ES8389_STATE_STANDBY    (7 << 0)
++
++#endif
+diff --git a/sound/soc/sunxi/sun4i-i2s.c b/sound/soc/sunxi/sun4i-i2s.c
+index 9655dec41..5cfef5348 100644
+--- a/sound/soc/sunxi/sun4i-i2s.c
++++ b/sound/soc/sunxi/sun4i-i2s.c
+@@ -1245,10 +1245,12 @@ static int sun4i_i2s_probe(struct platform_device *pdev)
+ 
+ 	i2s->playback_dma_data.addr = res->start +
+ 					i2s->variant->reg_offset_txdata;
+-	i2s->playback_dma_data.maxburst = 8;
++	// i2s->playback_dma_data.maxburst = 8;
++	i2s->playback_dma_data.maxburst = 4;
+ 
+ 	i2s->capture_dma_data.addr = res->start + SUN4I_I2S_FIFO_RX_REG;
+-	i2s->capture_dma_data.maxburst = 8;
++	// i2s->capture_dma_data.maxburst = 8;
++	i2s->capture_dma_data.maxburst = 4;
+ 
+ 	pm_runtime_enable(&pdev->dev);
+ 	if (!pm_runtime_enabled(&pdev->dev)) {

@@ -1,0 +1,14 @@
+diff --git a/lib/core.c b/lib/core.c
+index cf1d677..d71ca7a 100644
+--- a/lib/core.c
++++ b/lib/core.c
+@@ -28,7 +28,8 @@
+  * libgpiod with kernel headers as early as v4.8 we redefine them here for pre
+  * v5.5 build environments. Certain features will not work on older kernels.
+  */
+-#ifdef KERNEL_PRE_5_5
++// srgn: i patched kernel so theres no need to use these polyfills
++#if 0
+ #define GPIOLINE_FLAG_BIAS_PULL_UP		(1UL << 5)
+ #define GPIOLINE_FLAG_BIAS_PULL_DOWN		(1UL << 6)
+ #define GPIOLINE_FLAG_BIAS_DISABLE		(1UL << 7)

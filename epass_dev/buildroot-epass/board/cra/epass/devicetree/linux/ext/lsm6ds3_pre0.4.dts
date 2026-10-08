@@ -1,0 +1,15 @@
+/dts-v1/;
+/plugin/;
+/ {
+    fragment@1 {
+        target = <&i2c0>;
+        __overlay__ {
+            lsm6ds3:lsm6ds3@6a {
+                compatible = "st,lsm6ds3";
+                reg = <0x6a>;
+                interrupt-parent = <&pio>;
+                interrupts = <4 2 2>;/*(PE2)*/
+            };
+        };
+    };
+};
