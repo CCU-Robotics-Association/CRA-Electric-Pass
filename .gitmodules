@@ -1,0 +1,4 @@
+[submodule "epass_dev/drm_app_neo/lvgl"]
+	path = epass_dev/drm_app_neo/lvgl
+	url = https://github.com/lvgl/lvgl.git
+	branch = release/v9.4
