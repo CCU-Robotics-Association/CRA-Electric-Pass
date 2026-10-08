@@ -285,10 +285,13 @@ defconfig 未直接写出的依赖仍会由 Kconfig 和 `<PKG>_DEPENDENCIES` 自
 当前 `package/epass_drm_app/epass_drm_app.mk` 默认定义：
 
 ```make
-EPASS_DRM_APP_VERSION = a2.7.0
-EPASS_DRM_APP_SITE = https://github.com/rhodesepass/drm_app_neo.git
+EPASS_DRM_APP_VERSION = 2e28cdf3f26afb844e3d060a5d9965c9ceba1a44
+EPASS_DRM_APP_SITE = https://github.com/CCU-Robotics-Association/CRA-Electric-Pass.git
 EPASS_DRM_APP_SITE_METHOD = git
+EPASS_DRM_APP_SUBDIR = epass_dev/drm_app_neo
 ```
+
+该固定提交包含当前 CRA 维护的设备端主程序、内置 EEZ 工程以及官方 LVGL 子模块引用。Buildroot 会从组织仓库拉取源码，并在 `epass_dev/drm_app_neo` 子目录中完成配置和编译。
 
 本地开发可通过 Buildroot 的 override 机制显式指定源码。例如在不提交的顶层 `local.mk` 中配置：
 

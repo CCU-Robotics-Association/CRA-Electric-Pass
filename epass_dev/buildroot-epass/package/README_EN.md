@@ -167,7 +167,9 @@ The active configuration is `board/cra/epass/cra_epass_defconfig`.
 
 Main multimedia dependencies include `libcedarc`, `libcedarx`, `tinyalsa`, `libdrm`, `libpng`, `jpeg-turbo`, and FreeType. The older `sunxi-cedarx` package is not selected by the current CRA defconfig and is distinct from the selected `libcedarc + libcedarx` stack.
 
-The application package currently fetches a pinned revision from `https://github.com/rhodesepass/drm_app_neo.git`. For local development, use an uncommitted top-level `local.mk` override:
+The application package fetches pinned commit `2e28cdf3f26afb844e3d060a5d9965c9ceba1a44` from `https://github.com/CCU-Robotics-Association/CRA-Electric-Pass.git` and builds the `epass_dev/drm_app_neo` subdirectory. That revision contains the CRA-maintained device application, the vendored EEZ project, and the official LVGL submodule reference.
+
+For local development, use an uncommitted top-level `local.mk` override:
 
 ```make
 EPASS_DRM_APP_OVERRIDE_SRCDIR = $(TOPDIR)/../drm_app_neo

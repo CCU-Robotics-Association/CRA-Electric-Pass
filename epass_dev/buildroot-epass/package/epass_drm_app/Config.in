@@ -3,4 +3,4 @@ config BR2_PACKAGE_EPASS_DRM_APP
 	help
 	  Electronic Pass main program.
 
-	  https://github.com/rhodesepass/drm_app_neo
+	  https://github.com/CCU-Robotics-Association/CRA-Electric-Pass/tree/main/epass_dev/drm_app_neo
