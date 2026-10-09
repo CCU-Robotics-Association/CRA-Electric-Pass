@@ -1,0 +1,6 @@
+config BR2_PACKAGE_CRA_DEVICE_CONFIG
+	bool "cra_device_config"
+	help
+	  CRA-maintained v0.6 boot-overlay configuration tool.
+
+	  https://github.com/CCU-Robotics-Association/CRA-Electric-Pass/tree/main/epass_dev/components/device-config

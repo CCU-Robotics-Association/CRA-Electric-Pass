@@ -1,6 +1,7 @@
 config BR2_PACKAGE_EPASSCTL
 	bool "epassctl"
 	help
-	  Electronic Pass cli for epass_drm_app.
+	  CRA Electric Pass command-line client for the local main-display
+	  IPC service.
 
-	  https://github.com/CCU-Robotics-Association/epassctl
+	  https://github.com/CCU-Robotics-Association/CRA-Electric-Pass/tree/main/epass_dev/components/epassctl

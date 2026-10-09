@@ -3,7 +3,10 @@ config BR2_PACKAGE_LIBCEDARX
 	depends on BR2_PACKAGE_OPENSSL
 	bool "libcedarx"
 	help
-		Allwinner CedarX is a middware to process multimedia content.
+		Third-party Allwinner CedarX multimedia middleware. This is an
+		external dependency and is not maintained or authored by CRA.
+
+		https://github.com/rhodesepass/libcedarx
 
 comment "libcedarx needs libcedarc"
 	depends on !BR2_PACKAGE_LIBCEDARC

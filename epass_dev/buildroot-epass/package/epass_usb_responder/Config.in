@@ -1,6 +1,6 @@
 config BR2_PACKAGE_EPASS_USB_RESPONDER
 	bool "epass_usb_responder"
 	help
-	  Electronic Pass USB Responder.
+	  CRA Electric Pass FunctionFS file-transfer and management service.
 
-	  https://github.com/CCU-Robotics-Association/epass_usb_responder
+	  https://github.com/CCU-Robotics-Association/CRA-Electric-Pass/tree/main/epass_dev/components/usb-responder

@@ -5,14 +5,11 @@
 ################################################################################
 
 
-EPASSCTL_VERSION = 5e283be86e1c59de92ada732575cc2fe0cc43d47
-EPASSCTL_SITE = https://github.com/CCU-Robotics-Association/epassctl.git
-EPASSCTL_SITE_METHOD = git
-EPASSCTL_DEPENDENCIES = 
-EPASSCTL_CONF_OPTS = 
-
-define EPASSCTL_INSTALL_TARGET_CMDS
-	$(INSTALL) -D -m 0755 $(@D)/epassctl $(TARGET_DIR)/usr/bin/
-endef
+EPASSCTL_VERSION = 1.0.0
+EPASSCTL_SITE = $(TOPDIR)/../components
+EPASSCTL_SITE_METHOD = local
+EPASSCTL_SUBDIR = epassctl
+EPASSCTL_LICENSE = GPL-3.0-or-later
+EPASSCTL_CONF_OPTS = -DBUILD_TESTING=OFF
 
 $(eval $(cmake-package))

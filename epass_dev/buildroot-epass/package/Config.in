@@ -409,7 +409,7 @@ menu "Firmware"
 	source "package/wilink-bt-firmware/Config.in"
 	source "package/zd1211-firmware/Config.in"
 endmenu
-	source "package/srgn_config/Config.in"
+	source "package/cra_device_config/Config.in"
 	source "package/18xx-ti-utils/Config.in"
 	source "package/a10disp/Config.in"
 	source "package/acpica/Config.in"

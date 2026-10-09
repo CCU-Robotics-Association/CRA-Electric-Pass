@@ -64,7 +64,7 @@
 | `2` | 执行主程序生成的 `/tmp/appstart` 扩展应用脚本，结束后重启主程序 |
 | `3` | 按概率尝试显示一条关机提示，然后调用 `poweroff` |
 | `4` | 清空输入、执行 `format_sd`，结束后重启主程序 |
-| `5` | 挂载 boot 卷并进入 `srgn_config`，结束后重启主程序 |
+| `5` | 挂载 boot 卷并进入 `cra_device_config`，结束后重启主程序 |
 
 该表必须和 `drm_app_neo/src/config.h` 中的 `EXITCODE_*` 定义保持一致。
 

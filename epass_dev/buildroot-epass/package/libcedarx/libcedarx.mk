@@ -4,7 +4,7 @@
 #
 ################################################################################
 LIBCEDARX_VERSION = 6215f1c9465d2f23f02930957a0bacdda0878bb1
-LIBCEDARX_SITE = https://github.com/CCU-Robotics-Association/libcedarx.git
+LIBCEDARX_SITE = https://github.com/rhodesepass/libcedarx.git
 LIBCEDARX_SITE_METHOD = git
 LIBCEDARX_DEPENDENCIES = openssl libcedarc
 LIBCEDARX_INSTALL_STAGING = YES
@@ -14,9 +14,9 @@ LIBCEDARX_ARCHLIB = $(call qstrip,$(BR2_PACKAGE_LIBCEDARC_ARCHLIB))
 LIBCEDARX_CONF_ENV = \
 	CFLAGS="$(TARGET_CFLAGS) -D__ENABLE_ZLIB__ -Wno-error=format-overflow -Wno-error=tautological-compare -Wno-error=format-truncation -Wno-error=maybe-uninitialized" \
 	CPPFLAGS="$(TARGET_CXXFLAGS) -D__ENABLE_ZLIB__ -Wno-error=format-overflow -Wno-error=tautological-compare -Wno-error=format-truncation -Wno-error=maybe-uninitialized" \
-	LDFLAGS="$(TARGET_LDFLAGS) -L$(@D)/external/lib32/$(LIBCEDARX_ARCHLIB) -L$(STAGING_DIR)/usr/lib -lcrypto -lz -lssl" 
+	LDFLAGS="$(TARGET_LDFLAGS) -L$(@D)/external/lib32/$(LIBCEDARX_ARCHLIB) -L$(STAGING_DIR)/usr/lib -lcrypto -lz -lssl"
 LIBCEDARX_CONF_OPTS =
-LIBCEDARX_MAKE_ENV = 
+LIBCEDARX_MAKE_ENV =
 
 LIBCEDARX_INSTALL_STAGING_CMDS = $(TARGET_MAKE_ENV) $(MAKE) DESTDIR=$(STAGING_DIR) -C $(@D) install;
 

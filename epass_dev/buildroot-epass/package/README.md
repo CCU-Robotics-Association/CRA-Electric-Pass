@@ -48,7 +48,7 @@ package/
 ├── epass_drm_app/
 ├── epass_usb_responder/
 ├── epassctl/
-├── srgn_config/
+├── cra_device_config/
 ├── libcedarc/
 ├── libcedarx/
 └── <大量 Buildroot 上游软件包目录>/
@@ -99,7 +99,7 @@ Buildroot 生成的是完整固件 rootfs，不是面向设备的二进制包仓
 当前电子通行证相关条目直接加入了这个总配置文件：
 
 - `epass_drm_app`、`epass_usb_responder`、`epassctl` 位于 Audio and video applications；
-- `srgn_config` 位于 Hardware handling 附近；
+- `cra_device_config` 位于 Hardware handling 附近；
 - `libcedarc`、`libcedarx` 位于 Libraries；
 - `fb-test-app`、`tinyalsa`、`umtprd` 等沿用其通用分类。
 
@@ -246,11 +246,11 @@ board/cra/epass/cra_epass_defconfig
 | `epass_drm_app` | DRM/LVGL 主界面程序 | `/root/epass_drm_app` | CMake |
 | `epass_usb_responder` | 设备 USB 请求响应程序 | `/usr/bin/usb_responder` | CMake |
 | `epassctl` | 主程序控制命令行工具 | `/usr/bin/epassctl` | CMake |
-| `srgn_config` | 设备树/底层配置入口 | `/usr/bin/srgn_config` | CMake |
+| `cra_device_config` | v0.6 设备树/底层配置入口 | `/usr/bin/cra_device_config` | CMake |
 
 从 Git 历史可确认：
 
-- `srgn_config` 于 2026-01-19 加入当前项目分支；
+- 原 `srgn_config` 已由仓库内全新实现的 `cra_device_config` 取代；
 - `epass_drm_app` 和 `libcedarx` 于 2026-01-20 加入；
 - `epass_usb_responder` 和 `epassctl` 于 2026-05-18 加入。
 

@@ -5,15 +5,11 @@
 ################################################################################
 
 
-EPASS_USB_RESPONDER_VERSION = e57e74b8bf0611091e9fb6841ffa84be78260f03 
-EPASS_USB_RESPONDER_SITE = https://github.com/CCU-Robotics-Association/epass_usb_responder.git
-EPASS_USB_RESPONDER_SITE_METHOD = git
-EPASS_USB_RESPONDER_DEPENDENCIES = 
-EPASS_USB_RESPONDER_CONF_OPTS = 
-
-define EPASS_USB_RESPONDER_INSTALL_TARGET_CMDS
-	$(INSTALL) -D -m 0755 $(@D)/usb_responder $(TARGET_DIR)/usr/bin/
-endef
-
+EPASS_USB_RESPONDER_VERSION = 1.0.0
+EPASS_USB_RESPONDER_SITE = $(TOPDIR)/../components
+EPASS_USB_RESPONDER_SITE_METHOD = local
+EPASS_USB_RESPONDER_SUBDIR = usb-responder
+EPASS_USB_RESPONDER_LICENSE = GPL-3.0-or-later
+EPASS_USB_RESPONDER_CONF_OPTS = -DBUILD_TESTING=OFF
 
 $(eval $(cmake-package))

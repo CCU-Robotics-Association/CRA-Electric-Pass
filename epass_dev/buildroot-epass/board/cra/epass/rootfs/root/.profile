@@ -126,7 +126,7 @@ while true; do
         drain_stdin
         clear
         mount_boot
-        srgn_config
+        cra_device_config
         wait_any_key
         echo "Restarting..."
     else

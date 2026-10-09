@@ -46,7 +46,7 @@ package/
 ├── epass_drm_app/
 ├── epass_usb_responder/
 ├── epassctl/
-├── srgn_config/
+├── cra_device_config/
 ├── libcedarc/
 ├── libcedarx/
 └── <Buildroot upstream packages>/
@@ -163,7 +163,7 @@ The active configuration is `board/cra/epass/cra_epass_defconfig`.
 | `epass_drm_app` | Main DRM/LVGL interface | `/root/epass_drm_app` | CMake |
 | `epass_usb_responder` | USB request responder | `/usr/bin/usb_responder` | CMake |
 | `epassctl` | Main-application CLI | `/usr/bin/epassctl` | CMake |
-| `srgn_config` | Device-tree/low-level configuration entry | `/usr/bin/srgn_config` | CMake |
+| `cra_device_config` | v0.6 device-tree/low-level configuration entry | `/usr/bin/cra_device_config` | CMake |
 
 Main multimedia dependencies include `libcedarc`, `libcedarx`, `tinyalsa`, `libdrm`, `libpng`, `jpeg-turbo`, and FreeType. The older `sunxi-cedarx` package is not selected by the current CRA defconfig and is distinct from the selected `libcedarc + libcedarx` stack.
 
